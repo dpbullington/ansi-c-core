@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AnsiCCore.Cli/AnsiCCore.Cli.csproj" />
+    <Project Path="src/AnsiCCore.Driver/AnsiCCore.Driver.csproj" />
+    <Project Path="src/AnsiCCore.Emit/AnsiCCore.Emit.csproj" />
+    <Project Path="src/AnsiCCore.Frontend/AnsiCCore.Frontend.csproj" />
+    <Project Path="src/AnsiCCore.Runtime/AnsiCCore.Runtime.csproj" />
+    <Project Path="src/AnsiCCore.Semantics/AnsiCCore.Semantics.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AnsiCCore.Tests/AnsiCCore.Tests.csproj" />
+  </Folder>
+</Solution>
