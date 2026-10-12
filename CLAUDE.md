@@ -12,18 +12,21 @@ output is `.cs` files plus a reference to a small runtime library.
 Guiding goal ("the final boss"): take an arbitrary complete C application and produce a
 C# source set that compiles and runs with behavior matching the original.
 
-Two design pillars shape nearly every decision:
+The central design pillar shaping nearly every decision:
 
-- **COM-style late binding for CLR interop.** Where transpiled C needs to reach .NET
-  types/APIs, it does so through a late-bound, COM-like dispatch model (instantiate by
-  name, invoke methods/properties dynamically) rather than statically resolved calls.
-  This keeps the emitter decoupled from the exact shape of target CLR types.
 - **A safe .NET analog for C memory management.** C pointers, `malloc`/`free`, pointer
   arithmetic, and aliasing are mapped onto a *safe* managed model (no `unsafe`/raw
   pointers in output by default). The model lives in `AnsiCCore.Runtime` and the emitter
   targets it. Preserving C pointer semantics inside a safe managed representation is the
   hardest part of the project — treat the runtime memory model as a first-class design
   artifact, not an implementation detail.
+
+**Deferred: CLR interop.** An earlier design called for reaching .NET types/APIs through a
+COM-style late-bound dispatch model (instantiate by name, invoke methods/properties
+dynamically). **This is dropped for now** — do not build toward it. The pipeline currently
+targets self-contained C translation (standard-library behavior via `Runtime` shims), and
+the interop problem will be revisited later. Don't add late-binding/dynamic-dispatch
+machinery to Emit or Runtime until this decision is reversed.
 
 ## Toolchain
 
@@ -72,15 +75,15 @@ C source ─► Frontend ─► Semantics ─► Emit ─► C# source (+ Runtim
 - **`src/AnsiCCore.Semantics`** — semantic analysis over the AST: symbol tables, scopes,
   the C type system, type checking, and resolution. Annotates/lowers the AST into a form
   the emitter can translate without re-deriving C semantics.
-- **`src/AnsiCCore.Emit`** — translates the analyzed tree into C# source. Owns the two
-  pillars in practice: lowering C memory operations onto the `AnsiCCore.Runtime` memory
-  model, and generating the COM-style late-bound interop calls. References `Runtime` for
-  the shim type *metadata/names* it emits against.
+- **`src/AnsiCCore.Emit`** — translates the analyzed tree into C# source. Owns the memory
+  pillar in practice: lowering C memory operations onto the `AnsiCCore.Runtime` memory
+  model. References `Runtime` for the shim type *metadata/names* it emits against.
+  (CLR-interop call generation is deferred — see the pillar note above.)
 - **`src/AnsiCCore.Runtime`** — the runtime library the **emitted** C# depends on: the
-  safe memory model (managed analog of the C heap/stack, pointers, pointer arithmetic),
-  the late-binding/COM-style dispatch machinery, and C standard-library shims. This is the
-  one project whose public API is a contract with *generated code*, so treat changes to it
-  as semver-sensitive.
+  safe memory model (managed analog of the C heap/stack, pointers, pointer arithmetic) and
+  C standard-library shims. This is the one project whose public API is a contract with
+  *generated code*, so treat changes to it as semver-sensitive. (No late-binding/dispatch
+  machinery for now — CLR interop is deferred.)
 - **`src/AnsiCCore.Driver`** — orchestrates Frontend → Semantics → Emit for a set of
   translation units; owns multi-file / whole-program concerns.
 - **`src/AnsiCCore.Cli`** — argument parsing and process entry point; delegates to Driver.
@@ -92,9 +95,10 @@ C source ─► Frontend ─► Semantics ─► Emit ─► C# source (+ Runtim
   should consume an analyzed tree, not re-parse or re-type-check.
 - Anything the *generated* program needs at run time goes in `Runtime`, never in Emit.
   Emit only emits source that calls into Runtime.
-- The memory-model mapping and the late-binding interop model are cross-cutting contracts
-  between Emit (producer of calls) and Runtime (provider of implementations). When changing
-  one side, change the other in the same step and keep a test that transpiles + runs.
+- The memory-model mapping is a cross-cutting contract between Emit (producer of calls) and
+  Runtime (provider of implementations). When changing one side, change the other in the
+  same step and keep a test that transpiles + runs. (The late-binding interop model was a
+  second such contract; it is deferred — see the pillar note above.)
 
 ## Testing approach
 
