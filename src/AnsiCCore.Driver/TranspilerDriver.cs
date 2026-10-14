@@ -2,6 +2,7 @@ using AnsiCCore.Frontend.Diagnostics;
 using AnsiCCore.Frontend.Lexing;
 using AnsiCCore.Frontend.Parsing;
 using AnsiCCore.Frontend.Preprocessing;
+using AnsiCCore.Semantics.Analysis;
 
 namespace AnsiCCore.Driver;
 
@@ -29,7 +30,7 @@ public sealed class TranspilerDriver
             {
                 var bag = new DiagnosticBag();
                 bag.Error(new SourceLocation(path, 0, 0, 0), readError ?? "could not read file");
-                units.Add(new TranslationUnitResult(path, [], null, bag.ToList()));
+                units.Add(new TranslationUnitResult(path, [], null, null, bag.ToList()));
                 continue;
             }
 
@@ -67,7 +68,9 @@ public sealed class TranspilerDriver
         var parser = new Parser(tokens, diagnostics);
         var ast = parser.ParseTranslationUnit();
 
-        return new TranslationUnitResult(path, tokens, ast, diagnostics.ToList());
+        var model = SemanticAnalyzer.Analyze(ast, diagnostics);
+
+        return new TranslationUnitResult(path, tokens, ast, model, diagnostics.ToList());
     }
 
     private static string? TryReadFile(string path, out string? error)

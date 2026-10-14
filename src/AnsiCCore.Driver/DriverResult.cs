@@ -1,14 +1,16 @@
 using AnsiCCore.Frontend.Ast;
 using AnsiCCore.Frontend.Diagnostics;
 using AnsiCCore.Frontend.Lexing;
+using AnsiCCore.Semantics.Symbols;
 
 namespace AnsiCCore.Driver;
 
-/// <summary>The outcome of processing a single translation unit through the Frontend.</summary>
+/// <summary>The outcome of processing a single translation unit through the Frontend and Semantics.</summary>
 public sealed record TranslationUnitResult(
     string Path,
     IReadOnlyList<Token> Tokens,
     TranslationUnit? Ast,
+    SemanticModel? Model,
     IReadOnlyList<Diagnostic> Diagnostics);
 
 /// <summary>The outcome of a whole driver run.</summary>

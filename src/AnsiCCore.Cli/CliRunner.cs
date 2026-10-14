@@ -17,7 +17,7 @@ public static class CliRunner
 
     public static int Run(string[] args, TextWriter outWriter, TextWriter errWriter)
     {
-        if (!TryParseArgs(args, errWriter, out var inputs, out var options, out bool dumpTokens, out bool dumpAst, out bool showHelp))
+        if (!TryParseArgs(args, errWriter, out var inputs, out var options, out var dumps, out bool showHelp))
         {
             if (showHelp) { PrintUsage(outWriter); return ExitOk; }
             return ExitUsage;
@@ -38,16 +38,19 @@ public static class CliRunner
             foreach (var diag in unit.Diagnostics)
                 errWriter.WriteLine(diag.ToString());
 
-            if (dumpTokens)
+            if (dumps.Tokens)
                 DumpTokens(outWriter, unit);
 
-            if (dumpAst && unit.Ast != null)
+            if (dumps.Ast && unit.Ast != null)
             {
                 outWriter.WriteLine($"// AST for {unit.Path}");
                 outWriter.Write(AstPrinter.Print(unit.Ast));
             }
 
-            if (!dumpTokens && !dumpAst)
+            if (dumps.Symbols && unit.Model != null)
+                DumpSymbols(outWriter, unit);
+
+            if (!dumps.Any)
             {
                 int items = unit.Ast?.Items.Count ?? 0;
                 int errors = unit.Diagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
@@ -71,17 +74,33 @@ public static class CliRunner
         }
     }
 
+    private static void DumpSymbols(TextWriter outWriter, TranslationUnitResult unit)
+    {
+        var scope = unit.Model!.GlobalScope;
+        outWriter.WriteLine($"// global symbols for {unit.Path}");
+        foreach (var (name, sym) in scope.OrdinarySymbols.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+            outWriter.WriteLine($"  {sym.Kind,-12} {name} : {sym.Type}");
+        foreach (var (tag, type) in scope.Tags.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+            outWriter.WriteLine($"  {"tag",-12} {tag} : {type.Display}");
+    }
+
+    /// <summary>Which diagnostic dumps the user requested; <see cref="Any"/> picks summary vs. dump mode.</summary>
+    private readonly record struct DumpFlags(bool Tokens, bool Ast, bool Symbols)
+    {
+        public bool Any => Tokens || Ast || Symbols;
+    }
+
     private static bool TryParseArgs(
         string[] args, TextWriter errWriter,
         out List<string> inputs, out DriverOptions options,
-        out bool dumpTokens, out bool dumpAst, out bool showHelp)
+        out DumpFlags dumps, out bool showHelp)
     {
         inputs = [];
         options = DriverOptions.Default;
-        dumpTokens = false;
-        dumpAst = false;
+        dumps = default;
         showHelp = false;
 
+        bool dumpTokens = false, dumpAst = false, dumpSymbols = false;
         var includeDirs = new List<string>();
         var macros = new Dictionary<string, string?>(StringComparer.Ordinal);
         string? outputDir = null;
@@ -100,6 +119,9 @@ public static class CliRunner
                     break;
                 case "--dump-ast":
                     dumpAst = true;
+                    break;
+                case "--dump-symbols":
+                    dumpSymbols = true;
                     break;
                 case "--allow-line-comments":
                     allowLineComments = true;
@@ -139,6 +161,7 @@ public static class CliRunner
             OutputDirectory = outputDir,
             AllowLineComments = allowLineComments,
         };
+        dumps = new DumpFlags(dumpTokens, dumpAst, dumpSymbols);
         return true;
     }
 
@@ -170,6 +193,7 @@ public static class CliRunner
         w.WriteLine("  -D <name>[=value]      predefine a macro (repeatable; value defaults to 1)");
         w.WriteLine("  --dump-tokens          print the preprocessed token stream");
         w.WriteLine("  --dump-ast             print an outline of the parse tree");
+        w.WriteLine("  --dump-symbols         print the resolved global symbol table");
         w.WriteLine("  --allow-line-comments  accept // line comments (relaxes strict C89)");
         w.WriteLine("  -h, --help             show this help");
     }
