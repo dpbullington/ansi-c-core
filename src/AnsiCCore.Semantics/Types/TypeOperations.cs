@@ -14,6 +14,19 @@ public static class TypeOperations
     public static bool IsArithmetic(CType t) => IsInteger(t) || IsFloating(t);
     public static bool IsScalar(CType t) => IsArithmetic(t) || t is PointerType;
     public static bool IsAggregate(CType t) => t is ArrayType || (t is RecordType { IsUnion: false });
+    public static bool IsError(CType t) => t is ErrorType;
+    public static bool IsVoid(CType t) => t is VoidType;
+
+    /// <summary>
+    /// Array-to-pointer and function-to-pointer conversion (C89 §3.2.2.1). Applied to operands
+    /// in value contexts; the array's element qualifiers carry onto the pointee.
+    /// </summary>
+    public static QualType Decay(QualType t) => t.Type switch
+    {
+        ArrayType a => new QualType(new PointerType(a.Element)),
+        FunctionType => new QualType(new PointerType(t)),
+        _ => t,
+    };
 
     // --- size / alignment -------------------------------------------------
 

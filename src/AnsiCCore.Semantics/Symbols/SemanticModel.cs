@@ -12,6 +12,7 @@ namespace AnsiCCore.Semantics.Symbols;
 public sealed class SemanticModel
 {
     private readonly Dictionary<Node, Symbol> _symbolsByNode = new();
+    private readonly Dictionary<Expression, ExpressionType> _expressionTypes = new();
 
     public SemanticModel(Scope globalScope, IReadOnlyList<Diagnostic> diagnostics)
     {
@@ -26,5 +27,14 @@ public sealed class SemanticModel
 
     public IReadOnlyDictionary<Node, Symbol> SymbolsByNode => _symbolsByNode;
 
+    /// <summary>The type assigned to each expression node by type-checking.</summary>
+    public IReadOnlyDictionary<Expression, ExpressionType> ExpressionTypes => _expressionTypes;
+
+    /// <summary>The type of an expression, or null if it was not typed (e.g. inside an unparsed region).</summary>
+    public ExpressionType? TypeOf(Expression expression)
+        => _expressionTypes.TryGetValue(expression, out var t) ? t : null;
+
     internal void RecordSymbol(Node node, Symbol symbol) => _symbolsByNode[node] = symbol;
+
+    internal void RecordExpressionType(Expression expression, ExpressionType type) => _expressionTypes[expression] = type;
 }

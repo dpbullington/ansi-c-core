@@ -36,3 +36,14 @@ public sealed class VoidType : CType
     public override string Display => "void";
     public override bool IsComplete => false;
 }
+
+/// <summary>
+/// A sentinel used by expression type-checking after a type error, so that operations on it
+/// yield the error type again instead of producing a cascade of follow-on diagnostics.
+/// </summary>
+public sealed class ErrorType : CType
+{
+    internal ErrorType() { }
+    public override string Display => "<error-type>";
+    public override bool IsComplete => false;
+}

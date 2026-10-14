@@ -115,39 +115,39 @@ public sealed partial class SemanticAnalyzer
                 break;
 
             case ExpressionStatement e:
-                if (e.Expression is not null) AnalyzeExpression(e.Expression);
+                if (e.Expression is not null) TypeExpression(e.Expression);
                 break;
 
             case IfStatement i:
-                AnalyzeExpression(i.Condition);
+                RequireScalarControl(i.Condition, "if");
                 AnalyzeStatement(i.Then);
                 if (i.Otherwise is not null) AnalyzeStatement(i.Otherwise);
                 break;
 
             case WhileStatement w:
-                AnalyzeExpression(w.Condition);
+                RequireScalarControl(w.Condition, "while");
                 AnalyzeStatement(w.Body);
                 break;
 
             case DoStatement d:
                 AnalyzeStatement(d.Body);
-                AnalyzeExpression(d.Condition);
+                RequireScalarControl(d.Condition, "do-while");
                 break;
 
             case ForStatement f:
-                if (f.Initializer is not null) AnalyzeExpression(f.Initializer);
-                if (f.Condition is not null) AnalyzeExpression(f.Condition);
-                if (f.Iteration is not null) AnalyzeExpression(f.Iteration);
+                if (f.Initializer is not null) TypeExpression(f.Initializer);
+                if (f.Condition is not null) RequireScalarControl(f.Condition, "for");
+                if (f.Iteration is not null) TypeExpression(f.Iteration);
                 AnalyzeStatement(f.Body);
                 break;
 
             case SwitchStatement sw:
-                AnalyzeExpression(sw.Expression);
+                TypeExpression(sw.Expression);
                 AnalyzeStatement(sw.Body);
                 break;
 
             case CaseStatement c:
-                AnalyzeExpression(c.Value);
+                TypeExpression(c.Value);
                 AnalyzeStatement(c.Statement);
                 break;
 
@@ -166,7 +166,7 @@ public sealed partial class SemanticAnalyzer
                 break;
 
             case ReturnStatement r:
-                if (r.Value is not null) AnalyzeExpression(r.Value);
+                AnalyzeReturn(r);
                 break;
 
             // break / continue carry no identifiers to resolve.
@@ -176,99 +176,38 @@ public sealed partial class SemanticAnalyzer
     private void EnterScope() => _current = new Scope(ScopeKind.Block, _current);
     private void ExitScope() => _current = _current.Parent ?? _global;
 
-    // --- expressions (identifier resolution; full typing is a later slice) ------
-
-    private void AnalyzeExpression(Expression expression, bool inCallPosition = false)
+    private void RequireScalarControl(Expression condition, string context)
     {
-        switch (expression)
-        {
-            case IdentifierExpression id:
-                ResolveIdentifierUse(id, inCallPosition);
-                break;
-
-            case CallExpression call:
-                AnalyzeExpression(call.Callee, inCallPosition: true);
-                foreach (var arg in call.Arguments) AnalyzeExpression(arg);
-                break;
-
-            case IndexExpression idx:
-                AnalyzeExpression(idx.Array);
-                AnalyzeExpression(idx.Index);
-                break;
-
-            case MemberExpression m:
-                AnalyzeExpression(m.Target);
-                break;
-
-            case UnaryExpression u:
-                AnalyzeExpression(u.Operand);
-                break;
-
-            case PostfixExpression p:
-                AnalyzeExpression(p.Operand);
-                break;
-
-            case SizeOfExpression s:
-                AnalyzeExpression(s.Operand);
-                break;
-
-            case SizeOfTypeExpression st:
-                ResolveTypeName(st.Type);
-                break;
-
-            case CastExpression cast:
-                ResolveTypeName(cast.Type);
-                AnalyzeExpression(cast.Operand);
-                break;
-
-            case BinaryExpression b:
-                AnalyzeExpression(b.Left);
-                AnalyzeExpression(b.Right);
-                break;
-
-            case ConditionalExpression c:
-                AnalyzeExpression(c.Condition);
-                AnalyzeExpression(c.WhenTrue);
-                AnalyzeExpression(c.WhenFalse);
-                break;
-
-            case AssignmentExpression a:
-                AnalyzeExpression(a.Target);
-                AnalyzeExpression(a.Value);
-                break;
-
-            case CommaExpression comma:
-                AnalyzeExpression(comma.Left);
-                AnalyzeExpression(comma.Right);
-                break;
-
-            // literals resolve to nothing
-        }
+        var info = TypeExpression(condition);
+        var t = TypeOperations.Decay(info.Type).Type;
+        if (!TypeOperations.IsError(t) && !TypeOperations.IsScalar(t))
+            Error(condition.Location, $"controlling expression of '{context}' must have scalar type, not '{info.Type}'");
     }
 
-    private void ResolveIdentifierUse(IdentifierExpression id, bool inCallPosition)
+    private void AnalyzeReturn(ReturnStatement r)
     {
-        if (_current.LookupOrdinary(id.Name) is not null)
-            return;
+        var expected = _currentFunctionReturn ?? new QualType(CTypes.Int);
+        bool returnsVoid = TypeOperations.IsVoid(expected.Type);
 
-        if (inCallPosition)
+        if (r.Value is null)
         {
-            // C89 §3.3.2.2: a call to an undeclared function implicitly declares int f().
-            Warn(id.Location, $"implicit declaration of function '{id.Name}'");
-            var implicitType = new QualType(new FunctionType(CTypes.Int, [], isVariadic: false, hasPrototype: false));
-            _global.DeclareOrdinary(new Symbol(id.Name, SymbolKind.Function, implicitType, StorageClass.Extern, id.Location));
+            if (!returnsVoid)
+                Warn(r.Location, "'return' with no value in a function returning non-void");
+            return;
         }
+
+        var value = Decay(TypeExpression(r.Value));
+        if (returnsVoid)
+            Warn(r.Location, "'return' with a value in a function returning void");
         else
-        {
-            Error(id.Location, $"'{id.Name}' undeclared");
-        }
+            CheckAssignable(expected, value, r.Location, "return");
     }
 
     private void AnalyzeInitializer(Initializer initializer)
     {
         switch (initializer)
         {
-            case ExpressionInitializer e: AnalyzeExpression(e.Expression); break;
+            case ExpressionInitializer e: TypeExpression(e.Expression); break;
             case InitializerList l: foreach (var item in l.Items) AnalyzeInitializer(item); break;
         }
     }

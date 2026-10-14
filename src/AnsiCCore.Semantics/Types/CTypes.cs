@@ -12,6 +12,9 @@ public static class CTypes
 {
     public static VoidType Void { get; } = new();
 
+    /// <summary>The error sentinel (see <see cref="ErrorType"/>).</summary>
+    public static ErrorType Error { get; } = new();
+
     // Integer types (kind, isSigned, rank, size).
     public static IntegerType Char { get; } = new(IntegerKind.Char, isSigned: true, rank: 1, size: 1, "char");
     public static IntegerType SignedChar { get; } = new(IntegerKind.SignedChar, true, 1, 1, "signed char");
