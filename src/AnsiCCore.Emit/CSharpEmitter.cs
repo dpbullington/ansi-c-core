@@ -179,10 +179,19 @@ public sealed partial class CSharpEmitter
             var p = ft.Parameters[i];
             if (p.Name is null) continue;
             if (!_model.SymbolsByNode.TryGetValue(nodes[i], out var sym) || !_plan.IsMemoryBacked(sym)) continue;
-            if (p.Type.Type is ArrayType or RecordType)
-                throw new EmitException("aggregate (struct/array) parameters by value are not supported yet");
-
             string paramName = Naming.Safe(p.Name);
+
+            // A by-value struct/union parameter already arrives as a CPtr to the caller's copy;
+            // use it directly as the object's address (no spill needed).
+            if (p.Type.Type is RecordType)
+            {
+                _addressOf[sym] = paramName;
+                continue;
+            }
+            if (p.Type.Type is ArrayType)
+                throw new EmitException("array parameters by value are not supported");
+
+            // Address-taken scalar/pointer parameter: spill its incoming value into a region.
             string addr = paramName + "__a";
             _addressOf[sym] = addr;
             Line($"CPtr {addr} = __mem.Allocate({MemoryAccess.SizeOf(p.Type.Type)}, RegionKind.Automatic);");
@@ -232,6 +241,7 @@ public sealed partial class CSharpEmitter
         Line();
         Line("private static T Comma<T>(object? left, T right) => right;");
         Line("private static CPtr __PostAddPtr(ref CPtr p, long d) { CPtr old = p; p = p + d; return old; }");
+        Line("private static CPtr __ByValue(CPtr src, long size) { CPtr d = __mem.Allocate(size, RegionKind.Automatic); __mem.Copy(d, src, size); return d; }");
     }
 
     private void EmitStringFields()

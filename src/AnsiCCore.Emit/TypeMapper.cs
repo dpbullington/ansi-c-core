@@ -23,9 +23,28 @@ internal static class TypeMapper
         EnumType => "int",
         IntegerType i => MapInteger(i),
         FloatingType f => MapFloating(f),
-        PointerType => "CPtr",
+        PointerType p => MapPointer(p),
+        // A struct/union passed or returned by value is carried as a CPtr to its storage.
+        RecordType => "CPtr",
         _ => throw new EmitException($"type '{type.Display}' is not supported by the emitter yet"),
     };
+
+    /// <summary>True for a pointer-to-function type, which maps to a C# delegate rather than CPtr.</summary>
+    public static bool IsFunctionPointer(CType type) => type is PointerType { Pointee.Type: FunctionType };
+
+    private static string MapPointer(PointerType p)
+    {
+        if (p.Pointee.Type is not FunctionType ft)
+            return "CPtr";
+
+        // Function pointer -> Func<...>/Action<...> over the mapped signature.
+        string ret = Map(ft.ReturnType);
+        var paramTypes = ft.Parameters.Select(x => Map(x.Type)).ToList();
+        if (ret == "void")
+            return paramTypes.Count == 0 ? "System.Action" : $"System.Action<{string.Join(", ", paramTypes)}>";
+        paramTypes.Add(ret);
+        return $"System.Func<{string.Join(", ", paramTypes)}>";
+    }
 
     private static string MapInteger(IntegerType i) => i.Kind switch
     {

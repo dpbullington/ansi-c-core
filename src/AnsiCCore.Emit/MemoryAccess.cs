@@ -25,6 +25,7 @@ internal static class MemoryAccess
         EnumType => "Int32",
         FloatingType { Kind: FloatingKind.Float } => "Single",
         FloatingType => "Double",
+        PointerType { Pointee.Type: FunctionType } => throw new EmitException("function pointers stored in memory are not supported yet"),
         PointerType => "Pointer",
         _ => throw new EmitException($"type '{type.Display}' has no scalar memory accessor"),
     };

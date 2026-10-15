@@ -59,7 +59,11 @@ public sealed partial class CSharpEmitter
         switch (u.Operator)
         {
             case TokenKind.Ampersand: return EmitAddress(u.Operand);
-            case TokenKind.Star: return EmitLvalueValue(u);
+            case TokenKind.Star:
+                // Dereferencing a function pointer yields the function itself (the delegate).
+                return TypeMapper.IsFunctionPointer(_model.TypeOf(u.Operand)?.Type.Type ?? CTypes.Int)
+                    ? EmitValue(u.Operand)
+                    : EmitLvalueValue(u);
             case TokenKind.Bang: return $"({EmitCondition(u)} ? 1 : 0)";
             case TokenKind.Plus:
             case TokenKind.Minus:
@@ -84,6 +88,7 @@ public sealed partial class CSharpEmitter
                 _model.SymbolsByNode.TryGetValue(id, out var sym);
                 if (sym is not null && _addressOf.TryGetValue(sym, out var a)) return a;
                 if (sym is not null && _globalAddress.TryGetValue(sym, out var g)) return g;
+                if (sym is { Kind: SymbolKind.Function }) return Naming.Safe(id.Name); // &func -> method group (delegate)
                 throw new EmitException($"cannot take the address of '{id.Name}'");
 
             case UnaryExpression { Operator: TokenKind.Star } u:
@@ -96,6 +101,10 @@ public sealed partial class CSharpEmitter
                 return EmitMemberAddress(m);
 
             default:
+                // An aggregate rvalue (e.g. a struct returned by a call) is referred to by the
+                // CPtr its value already is.
+                if (_model.TypeOf(e)?.Type.Type is ArrayType or RecordType)
+                    return EmitValue(e);
                 throw new EmitException($"expression '{e.GetType().Name}' is not an addressable lvalue");
         }
     }
@@ -211,17 +220,18 @@ public sealed partial class CSharpEmitter
             case UnaryExpression { Operator: TokenKind.Bang } u:
                 return $"!({EmitCondition(u.Operand)})";
             default:
-                return _model.TypeOf(e)?.Type.Type is PointerType
-                    ? $"({EmitValue(e)} != CPtr.Null)"
-                    : $"({EmitValue(e)} != 0)";
+                var dt = _model.TypeOf(e)?.Type.Type;
+                if (TypeMapper.IsFunctionPointer(dt ?? CTypes.Int)) return $"({EmitValue(e)} != null)";
+                return dt is PointerType ? $"({EmitValue(e)} != CPtr.Null)" : $"({EmitValue(e)} != 0)";
         }
     }
 
-    /// <summary>Emits an operand of a comparison, rendering a null-pointer constant as CPtr.Null when the sibling is a pointer.</summary>
+    /// <summary>Emits a comparison operand, rendering a null-pointer constant to match the sibling's pointer kind.</summary>
     private string EmitComparand(Expression operand, Expression sibling)
     {
-        if (_model.TypeOf(sibling)?.Type.Type is PointerType && IsNullConstant(operand))
-            return "CPtr.Null";
+        var siblingType = _model.TypeOf(sibling)?.Type.Type;
+        if (IsNullConstant(operand) && siblingType is PointerType)
+            return TypeMapper.IsFunctionPointer(siblingType) ? "null" : "CPtr.Null";
         return EmitValue(operand);
     }
 
@@ -375,12 +385,19 @@ public sealed partial class CSharpEmitter
 
     private string EmitConvert(QualType target, Expression e)
     {
+        // A by-value struct/union argument or return value is copied into fresh storage.
+        if (target.Type is RecordType r)
+            return $"__ByValue({EmitValue(e)}, {MemoryAccess.SizeOf(r)})";
+
+        if (TypeMapper.IsFunctionPointer(target.Type))
+            return IsNullConstant(e) ? "null" : EmitValue(e); // function pointers are delegates
+
         if (target.Type is PointerType)
             return IsNullConstant(e) ? "CPtr.Null" : EmitValue(e);
 
         string value = EmitValue(e);
         var source = _model.TypeOf(e)?.Type;
-        if (source is null)
+        if (source is null || TypeMapper.IsFunctionPointer(source.Value.Type))
             return value;
         if (source.Value.Type is PointerType) // pointer -> integer (implicit, as in a return/assignment)
             return $"unchecked(({TypeMapper.Map(target)})({value}).Address)";
