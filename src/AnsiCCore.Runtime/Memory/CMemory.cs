@@ -166,6 +166,20 @@ public sealed class CMemory
     public void WriteDouble(CPtr p, double v) => BinaryPrimitives.WriteDoubleLittleEndian(ResolveSpan(p.Address, 8, "write"), v);
     public void WritePointer(CPtr p, CPtr value) => WriteUInt64(p, value.Address);
 
+    // --- stores that return the written value (for assignment used as a value) ----
+
+    public sbyte StoreInt8(CPtr p, sbyte v) { WriteInt8(p, v); return v; }
+    public byte StoreUInt8(CPtr p, byte v) { WriteUInt8(p, v); return v; }
+    public short StoreInt16(CPtr p, short v) { WriteInt16(p, v); return v; }
+    public ushort StoreUInt16(CPtr p, ushort v) { WriteUInt16(p, v); return v; }
+    public int StoreInt32(CPtr p, int v) { WriteInt32(p, v); return v; }
+    public uint StoreUInt32(CPtr p, uint v) { WriteUInt32(p, v); return v; }
+    public long StoreInt64(CPtr p, long v) { WriteInt64(p, v); return v; }
+    public ulong StoreUInt64(CPtr p, ulong v) { WriteUInt64(p, v); return v; }
+    public float StoreSingle(CPtr p, float v) { WriteSingle(p, v); return v; }
+    public double StoreDouble(CPtr p, double v) { WriteDouble(p, v); return v; }
+    public CPtr StorePointer(CPtr p, CPtr v) { WritePointer(p, v); return v; }
+
     // --- bulk operations (memcpy / memmove / memset / memcmp) -------------
 
     /// <summary>Copies <paramref name="count"/> bytes; safe even when the regions overlap (like memmove).</summary>

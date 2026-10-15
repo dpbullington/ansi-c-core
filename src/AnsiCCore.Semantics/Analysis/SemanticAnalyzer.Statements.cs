@@ -76,12 +76,19 @@ public sealed partial class SemanticAnalyzer
             return;
         }
 
-        // Prototype: declare each named parameter.
-        if (functionType is not null)
+        // Prototype: declare each named parameter, keying its symbol to the parameter AST node
+        // (counts align with the declarator's parameter list; a lone "(void)" has none).
+        if (functionType is null) return;
+
+        var nodes = funcDeclarator?.Parameters.Parameters;
+        for (int i = 0; i < functionType.Parameters.Count; i++)
         {
-            foreach (var p in functionType.Parameters)
-                if (p.Name is not null)
-                    _current.DeclareOrdinary(new Symbol(p.Name, SymbolKind.Parameter, p.Type, StorageClass.None, f.Location));
+            var p = functionType.Parameters[i];
+            if (p.Name is null) continue;
+            var sym = new Symbol(p.Name, SymbolKind.Parameter, p.Type, StorageClass.None, f.Location);
+            _current.DeclareOrdinary(sym);
+            if (nodes is not null && i < nodes.Count)
+                _symbols[nodes[i]] = sym;
         }
     }
 

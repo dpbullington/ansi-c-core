@@ -23,6 +23,7 @@ internal static class TypeMapper
         EnumType => "int",
         IntegerType i => MapInteger(i),
         FloatingType f => MapFloating(f),
+        PointerType => "CPtr",
         _ => throw new EmitException($"type '{type.Display}' is not supported by the emitter yet"),
     };
 

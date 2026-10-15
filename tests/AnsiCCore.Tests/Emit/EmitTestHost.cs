@@ -61,6 +61,23 @@ internal static class EmitTestHost
         return value is int code ? code : 0;
     }
 
+    /// <summary>Runs the program and returns both its exit code and whatever it wrote to stdout.</summary>
+    public static (int Exit, string Output) RunWithOutput(string cSource)
+    {
+        var original = Console.Out;
+        var captured = new StringWriter();
+        Console.SetOut(captured);
+        try
+        {
+            int exit = Run(cSource);
+            return (exit, captured.ToString());
+        }
+        finally
+        {
+            Console.SetOut(original);
+        }
+    }
+
     private static MetadataReference[] BuildReferences()
     {
         var tpa = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator);
