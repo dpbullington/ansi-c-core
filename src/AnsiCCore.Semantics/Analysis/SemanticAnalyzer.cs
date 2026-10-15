@@ -23,6 +23,7 @@ public sealed partial class SemanticAnalyzer
     private readonly DiagnosticBag _diagnostics;
     private readonly Dictionary<Node, Symbol> _symbols = new();
     private readonly Dictionary<Expression, ExpressionType> _expressionTypes = new();
+    private readonly Dictionary<TypeName, QualType> _typeNames = new();
     private readonly Scope _global;
     private Scope _current;
 
@@ -50,6 +51,8 @@ public sealed partial class SemanticAnalyzer
             model.RecordSymbol(node, sym);
         foreach (var (expr, type) in analyzer._expressionTypes)
             model.RecordExpressionType(expr, type);
+        foreach (var (node, type) in analyzer._typeNames)
+            model.RecordTypeName(node, type);
         return model;
     }
 

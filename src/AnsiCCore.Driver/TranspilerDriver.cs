@@ -1,3 +1,4 @@
+using AnsiCCore.Emit;
 using AnsiCCore.Frontend.Diagnostics;
 using AnsiCCore.Frontend.Lexing;
 using AnsiCCore.Frontend.Parsing;
@@ -30,7 +31,7 @@ public sealed class TranspilerDriver
             {
                 var bag = new DiagnosticBag();
                 bag.Error(new SourceLocation(path, 0, 0, 0), readError ?? "could not read file");
-                units.Add(new TranslationUnitResult(path, [], null, null, bag.ToList()));
+                units.Add(new TranslationUnitResult(path, [], null, null, null, bag.ToList()));
                 continue;
             }
 
@@ -70,7 +71,16 @@ public sealed class TranspilerDriver
 
         var model = SemanticAnalyzer.Analyze(ast, diagnostics);
 
-        return new TranslationUnitResult(path, tokens, ast, model, diagnostics.ToList());
+        // Emit only when requested and the program is semantically sound; surface unsupported
+        // constructs as diagnostics.
+        string? emitted = null;
+        if (_options.EmitCSharp && !diagnostics.HasErrors)
+        {
+            try { emitted = CSharpEmitter.Emit(ast, model); }
+            catch (EmitException ex) { diagnostics.Error(new SourceLocation(path, 0, 0, 0), $"emit: {ex.Message}"); }
+        }
+
+        return new TranslationUnitResult(path, tokens, ast, model, emitted, diagnostics.ToList());
     }
 
     private static string? TryReadFile(string path, out string? error)

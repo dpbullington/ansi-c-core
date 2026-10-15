@@ -50,6 +50,15 @@ public static class CliRunner
             if (dumps.Symbols && unit.Model != null)
                 DumpSymbols(outWriter, unit);
 
+            if (dumps.CSharp && unit.EmittedCSharp != null)
+            {
+                outWriter.WriteLine($"// C# for {unit.Path}");
+                outWriter.Write(unit.EmittedCSharp);
+            }
+
+            if (options.OutputDirectory != null && unit.EmittedCSharp != null)
+                WriteOutput(outWriter, errWriter, options.OutputDirectory, unit);
+
             if (!dumps.Any)
             {
                 int items = unit.Ast?.Items.Count ?? 0;
@@ -57,9 +66,6 @@ public static class CliRunner
                 outWriter.WriteLine($"{unit.Path}: {items} top-level item(s), {errors} error(s)");
             }
         }
-
-        if (options.OutputDirectory != null && result.Success)
-            outWriter.WriteLine("ansicc: parsing succeeded; code generation is not yet implemented, no output written");
 
         return result.Success ? ExitOk : ExitError;
     }
@@ -74,6 +80,21 @@ public static class CliRunner
         }
     }
 
+    private static void WriteOutput(TextWriter outWriter, TextWriter errWriter, string outputDirectory, TranslationUnitResult unit)
+    {
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+            string file = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(unit.Path) + ".g.cs");
+            File.WriteAllText(file, unit.EmittedCSharp!);
+            outWriter.WriteLine($"ansicc: wrote {file}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            errWriter.WriteLine($"ansicc: could not write output for {unit.Path}: {ex.Message}");
+        }
+    }
+
     private static void DumpSymbols(TextWriter outWriter, TranslationUnitResult unit)
     {
         var scope = unit.Model!.GlobalScope;
@@ -85,9 +106,9 @@ public static class CliRunner
     }
 
     /// <summary>Which diagnostic dumps the user requested; <see cref="Any"/> picks summary vs. dump mode.</summary>
-    private readonly record struct DumpFlags(bool Tokens, bool Ast, bool Symbols)
+    private readonly record struct DumpFlags(bool Tokens, bool Ast, bool Symbols, bool CSharp)
     {
-        public bool Any => Tokens || Ast || Symbols;
+        public bool Any => Tokens || Ast || Symbols || CSharp;
     }
 
     private static bool TryParseArgs(
@@ -100,7 +121,7 @@ public static class CliRunner
         dumps = default;
         showHelp = false;
 
-        bool dumpTokens = false, dumpAst = false, dumpSymbols = false;
+        bool dumpTokens = false, dumpAst = false, dumpSymbols = false, dumpCSharp = false;
         var includeDirs = new List<string>();
         var macros = new Dictionary<string, string?>(StringComparer.Ordinal);
         string? outputDir = null;
@@ -122,6 +143,9 @@ public static class CliRunner
                     break;
                 case "--dump-symbols":
                     dumpSymbols = true;
+                    break;
+                case "--emit":
+                    dumpCSharp = true;
                     break;
                 case "--allow-line-comments":
                     allowLineComments = true;
@@ -160,8 +184,9 @@ public static class CliRunner
             PredefinedMacros = macros,
             OutputDirectory = outputDir,
             AllowLineComments = allowLineComments,
+            EmitCSharp = dumpCSharp || outputDir != null,
         };
-        dumps = new DumpFlags(dumpTokens, dumpAst, dumpSymbols);
+        dumps = new DumpFlags(dumpTokens, dumpAst, dumpSymbols, dumpCSharp);
         return true;
     }
 
@@ -188,7 +213,8 @@ public static class CliRunner
         w.WriteLine("usage: ansicc [options] <input.c ...>");
         w.WriteLine();
         w.WriteLine("options:");
-        w.WriteLine("  -o <dir>               output directory (code generation not yet implemented)");
+        w.WriteLine("  -o <dir>               write emitted C# (<name>.g.cs) to this directory");
+        w.WriteLine("  --emit                 print the emitted C# to stdout");
         w.WriteLine("  -I <dir>               add a directory to the #include search path (repeatable)");
         w.WriteLine("  -D <name>[=value]      predefine a macro (repeatable; value defaults to 1)");
         w.WriteLine("  --dump-tokens          print the preprocessed token stream");

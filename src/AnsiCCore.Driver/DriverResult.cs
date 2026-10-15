@@ -5,12 +5,13 @@ using AnsiCCore.Semantics.Symbols;
 
 namespace AnsiCCore.Driver;
 
-/// <summary>The outcome of processing a single translation unit through the Frontend and Semantics.</summary>
+/// <summary>The outcome of processing a single translation unit through the pipeline.</summary>
 public sealed record TranslationUnitResult(
     string Path,
     IReadOnlyList<Token> Tokens,
     TranslationUnit? Ast,
     SemanticModel? Model,
+    string? EmittedCSharp,
     IReadOnlyList<Diagnostic> Diagnostics);
 
 /// <summary>The outcome of a whole driver run.</summary>

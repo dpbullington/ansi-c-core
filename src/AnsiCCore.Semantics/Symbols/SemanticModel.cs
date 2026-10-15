@@ -13,6 +13,7 @@ public sealed class SemanticModel
 {
     private readonly Dictionary<Node, Symbol> _symbolsByNode = new();
     private readonly Dictionary<Expression, ExpressionType> _expressionTypes = new();
+    private readonly Dictionary<TypeName, Types.QualType> _resolvedTypeNames = new();
 
     public SemanticModel(Scope globalScope, IReadOnlyList<Diagnostic> diagnostics)
     {
@@ -34,7 +35,12 @@ public sealed class SemanticModel
     public ExpressionType? TypeOf(Expression expression)
         => _expressionTypes.TryGetValue(expression, out var t) ? t : null;
 
+    /// <summary>The resolved type of a cast/sizeof type-name.</summary>
+    public IReadOnlyDictionary<TypeName, Types.QualType> ResolvedTypeNames => _resolvedTypeNames;
+
     internal void RecordSymbol(Node node, Symbol symbol) => _symbolsByNode[node] = symbol;
 
     internal void RecordExpressionType(Expression expression, ExpressionType type) => _expressionTypes[expression] = type;
+
+    internal void RecordTypeName(TypeName node, Types.QualType type) => _resolvedTypeNames[node] = type;
 }

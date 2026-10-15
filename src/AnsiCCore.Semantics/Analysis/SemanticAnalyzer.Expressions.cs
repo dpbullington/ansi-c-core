@@ -72,6 +72,7 @@ public sealed partial class SemanticAnalyzer
         var sym = _current.LookupOrdinary(id.Name);
         if (sym is not null)
         {
+            _symbols[id] = sym; // record the use -> declaration binding for Emit
             bool isLvalue = sym.Kind is SymbolKind.Variable or SymbolKind.Parameter;
             return Record(id, sym.Type, isLvalue);
         }
@@ -81,7 +82,9 @@ public sealed partial class SemanticAnalyzer
             // C89 §3.3.2.2: a call to an undeclared function implicitly declares int f().
             Warn(id.Location, $"implicit declaration of function '{id.Name}'");
             var implicitType = new QualType(new FunctionType(CTypes.Int, [], isVariadic: false, hasPrototype: false));
-            _global.DeclareOrdinary(new Symbol(id.Name, SymbolKind.Function, implicitType, StorageClass.Extern, id.Location));
+            var implicitSym = new Symbol(id.Name, SymbolKind.Function, implicitType, StorageClass.Extern, id.Location);
+            _global.DeclareOrdinary(implicitSym);
+            _symbols[id] = implicitSym;
             return Record(id, implicitType, isLvalue: false);
         }
 

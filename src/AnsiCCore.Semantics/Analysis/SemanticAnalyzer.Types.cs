@@ -295,8 +295,8 @@ public sealed partial class SemanticAnalyzer
     private QualType ResolveTypeName(TypeName typeName)
     {
         var baseType = ResolveSpecifiers(typeName.Specifiers);
-        if (typeName.Declarator is null) return baseType;
-        var (_, type) = ResolveDeclarator(baseType, typeName.Declarator);
-        return type;
+        var result = typeName.Declarator is null ? baseType : ResolveDeclarator(baseType, typeName.Declarator).Type;
+        _typeNames[typeName] = result;
+        return result;
     }
 }

@@ -99,6 +99,40 @@ public class CliRunnerTests
     }
 
     [Test]
+    public void Emit_PrintsCSharpToStdout()
+    {
+        string path = WriteTempC("int main(void) { return 7; }");
+        try
+        {
+            var (code, output, _) = Run("--emit", path);
+            Assert.That(code, Is.EqualTo(0));
+            Assert.That(output, Does.Contain("class CProgram"));
+            Assert.That(output, Does.Contain("Main()"));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Test]
+    public void OutputDirectory_WritesGeneratedFile()
+    {
+        string path = WriteTempC("int main(void) { return 0; }");
+        string outDir = Path.Combine(Path.GetTempPath(), $"ansicc_out_{Guid.NewGuid():N}");
+        try
+        {
+            var (code, _, _) = Run("-o", outDir, path);
+            Assert.That(code, Is.EqualTo(0));
+            string expected = Path.Combine(outDir, Path.GetFileNameWithoutExtension(path) + ".g.cs");
+            Assert.That(File.Exists(expected), Is.True);
+            Assert.That(File.ReadAllText(expected), Does.Contain("class CProgram"));
+        }
+        finally
+        {
+            File.Delete(path);
+            if (Directory.Exists(outDir)) Directory.Delete(outDir, recursive: true);
+        }
+    }
+
+    [Test]
     public void DefineOption_IsHonored()
     {
         string path = WriteTempC("int a[SIZE];");

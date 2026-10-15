@@ -10,8 +10,11 @@ public sealed record DriverOptions
     public IReadOnlyDictionary<string, string?> PredefinedMacros { get; init; }
         = new Dictionary<string, string?>(StringComparer.Ordinal);
 
-    /// <summary>Where emitted C# will be written once Emit exists. Unused for now.</summary>
+    /// <summary>Directory to write emitted C# to; null means don't write files.</summary>
     public string? OutputDirectory { get; init; }
+
+    /// <summary>Run the Emit stage. Off by default so analysis-only runs skip code generation.</summary>
+    public bool EmitCSharp { get; init; }
 
     /// <summary>Relax strict C89 to accept <c>//</c> line comments.</summary>
     public bool AllowLineComments { get; init; }
