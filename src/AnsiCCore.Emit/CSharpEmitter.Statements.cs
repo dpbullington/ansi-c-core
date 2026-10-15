@@ -120,22 +120,108 @@ public sealed partial class CSharpEmitter
 
             case WhileStatement w:
                 Line($"while ({EmitCondition(w.Condition)})");
+                _breakStack.Push(null);
                 EmitNested(w.Body);
+                _breakStack.Pop();
                 break;
 
             case DoStatement d:
                 Line("do");
+                _breakStack.Push(null);
                 EmitNested(d.Body);
+                _breakStack.Pop();
                 Line($"while ({EmitCondition(d.Condition)});");
                 break;
 
             case ForStatement f: EmitFor(f); break;
+            case SwitchStatement sw: EmitSwitch(sw); break;
 
-            case BreakStatement: Line("break;"); break;
-            case ContinueStatement: Line("continue;"); break;
+            case CaseStatement c: EmitCaseLabel(c, _switchCaseLabels?.GetValueOrDefault(c), c.Statement); break;
+            case DefaultStatement df: EmitCaseLabel(df, _switchCaseLabels?.GetValueOrDefault(df), df.Statement); break;
+
+            case LabeledStatement l:
+                Line($"{Naming.Safe(l.Label)}:;");
+                EmitStatement(l.Statement);
+                break;
+
+            case GotoStatement g:
+                Line($"goto {Naming.Safe(g.Label)};");
+                break;
+
+            case BreakStatement:
+                Line(_breakStack.Count > 0 && _breakStack.Peek() is { } label ? $"goto {label};" : "break;");
+                break;
+
+            case ContinueStatement:
+                Line("continue;");
+                break;
 
             default:
                 throw new EmitException($"statement '{statement.GetType().Name}' is not supported yet");
+        }
+    }
+
+    private void EmitCaseLabel(Statement node, string? label, Statement inner)
+    {
+        if (label is null)
+            throw new EmitException("'case'/'default' label outside of a switch");
+        Line($"{label}:;");
+        EmitStatement(inner);
+    }
+
+    /// <summary>
+    /// Lowers a C switch to a dispatch of gotos plus a linear body, which preserves fall-through
+    /// (C# forbids it) and handles labels interleaved with statements. The common form — cases at
+    /// the top of the switch body — is supported; jumping into a nested block (Duff's device) is not.
+    /// </summary>
+    private void EmitSwitch(SwitchStatement sw)
+    {
+        int id = _labelCounter++;
+        string end = $"__swEnd{id}";
+        var items = (sw.Body as CompoundStatement)?.Items ?? [sw.Body];
+
+        var labels = new Dictionary<Statement, string>();
+        var cases = new List<CaseStatement>();
+        DefaultStatement? defaultNode = null;
+        int caseIndex = 0;
+        foreach (var item in items)
+            if (item is Statement s)
+                CollectCases(s, id, labels, cases, ref defaultNode, ref caseIndex);
+
+        OpenBrace();
+        Line($"var __sw{id} = {EmitValue(sw.Expression)};");
+        foreach (var c in cases)
+            Line($"if (__sw{id} == {EmitValue(c.Value)}) goto {labels[c]};");
+        Line($"goto {(defaultNode is not null ? labels[defaultNode] : end)};");
+
+        var savedLabels = _switchCaseLabels;
+        _switchCaseLabels = labels;
+        _breakStack.Push(end);
+        foreach (var item in items)
+            EmitBlockItem(item);
+        _breakStack.Pop();
+        _switchCaseLabels = savedLabels;
+
+        Line($"{end}:;");
+        CloseBrace();
+    }
+
+    /// <summary>Records the label for each case/default, following the chain of consecutive labels.</summary>
+    private static void CollectCases(Statement s, int switchId, Dictionary<Statement, string> labels,
+        List<CaseStatement> cases, ref DefaultStatement? defaultNode, ref int caseIndex)
+    {
+        switch (s)
+        {
+            case CaseStatement c:
+                labels[c] = $"__case{switchId}_{caseIndex++}";
+                cases.Add(c);
+                CollectCases(c.Statement, switchId, labels, cases, ref defaultNode, ref caseIndex);
+                break;
+            case DefaultStatement d:
+                labels[d] = $"__default{switchId}";
+                defaultNode = d;
+                CollectCases(d.Statement, switchId, labels, cases, ref defaultNode, ref caseIndex);
+                break;
         }
     }
 
@@ -160,7 +246,9 @@ public sealed partial class CSharpEmitter
         string cond = f.Condition is null ? string.Empty : EmitCondition(f.Condition);
         string iter = f.Iteration is null ? string.Empty : EmitForClause(f.Iteration);
         Line($"for ({init}; {cond}; {iter})");
+        _breakStack.Push(null);
         EmitNested(f.Body);
+        _breakStack.Pop();
     }
 
     private void EmitExpressionStatement(Expression e)

@@ -30,6 +30,9 @@ public sealed partial class CSharpEmitter
     private readonly Dictionary<Symbol, string> _localNames = new();      // symbol -> unique C# name
     private readonly Dictionary<Symbol, string> _addressOf = new();       // memory-backed local/param -> CPtr expr
     private readonly HashSet<string> _usedNames = new(StringComparer.Ordinal);
+    private int _labelCounter;                                            // generates unique switch labels
+    private readonly Stack<string?> _breakStack = new();                  // null = loop (C# break), else switch end label
+    private Dictionary<Statement, string>? _switchCaseLabels;             // case/default node -> label (current switch)
 
     // Module-level state.
     private readonly Dictionary<Symbol, string> _globalAddress = new();   // memory-backed global -> CPtr field
@@ -155,6 +158,9 @@ public sealed partial class CSharpEmitter
         _localNames.Clear();
         _addressOf.Clear();
         _usedNames.Clear();
+        _labelCounter = 0;
+        _breakStack.Clear();
+        _switchCaseLabels = null;
         foreach (var p in ft.Parameters.Where(p => p.Name is not null))
             _usedNames.Add(Naming.Safe(p.Name!));
 
