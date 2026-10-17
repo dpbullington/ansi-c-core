@@ -21,9 +21,9 @@ public sealed partial class Parser
 
         var firstDeclarator = ParseDeclarator(allowAbstract: false);
 
-        // Function definition: declarator is a function and the body (or K&R param decls) follows.
-        bool looksLikeFunction = firstDeclarator is FunctionDeclarator;
-        if (looksLikeFunction && (Check(TokenKind.LBrace) || IsDeclarationStart()))
+        // Function definition: the declarator denotes a function (possibly returning a pointer, as
+        // in "char *f(void)") and a body — or K&R parameter declarations — follows.
+        if (FindFunctionDeclarator(firstDeclarator) is not null && (Check(TokenKind.LBrace) || IsDeclarationStart()))
         {
             RegisterDeclaredName(specifiers, firstDeclarator);
             return ParseFunctionDefinitionTail(start, specifiers, firstDeclarator);
@@ -46,6 +46,15 @@ public sealed partial class Parser
         Expect(TokenKind.Semicolon, "';' after declaration");
         return new Declaration(start, specifiers, initDeclarators);
     }
+
+    /// <summary>Finds the function derivation in a declarator chain (for recognizing function definitions).</summary>
+    private static FunctionDeclarator? FindFunctionDeclarator(Declarator d) => d switch
+    {
+        FunctionDeclarator f => f,
+        PointerDeclarator p => FindFunctionDeclarator(p.Inner),
+        ArrayDeclarator a => FindFunctionDeclarator(a.Inner),
+        _ => null,
+    };
 
     private FunctionDefinition ParseFunctionDefinitionTail(SourceLocation start, DeclarationSpecifiers specifiers, Declarator declarator)
     {

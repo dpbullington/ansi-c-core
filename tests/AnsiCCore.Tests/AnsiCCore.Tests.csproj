@@ -21,6 +21,11 @@
     <Using Include="NUnit.Framework" />
   </ItemGroup>
 
+  <!-- Golden C# snapshots under Programs/ are reference text, not part of this project's build. -->
+  <ItemGroup>
+    <Compile Remove="Programs/**/*.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\AnsiCCore.Frontend\AnsiCCore.Frontend.csproj" />
     <ProjectReference Include="..\..\src\AnsiCCore.Semantics\AnsiCCore.Semantics.csproj" />

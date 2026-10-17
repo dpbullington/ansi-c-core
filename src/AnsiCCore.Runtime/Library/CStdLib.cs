@@ -66,8 +66,9 @@ public static class CStdLib
     }
 
     /// <summary>
-    /// A small <c>printf</c>: supports <c>%d %i %u %c %s %x %% </c> and ignores width/precision.
-    /// Arguments arrive boxed in declaration order.
+    /// A small <c>printf</c>: supports the <c>%d %i %u %x %c %s %f %%</c> conversions. Flags, field
+    /// width, and precision are skipped (not applied) and length modifiers (<c>h l L z</c>) are
+    /// tolerated. Arguments arrive boxed in declaration order.
     /// </summary>
     public static int Printf(CMemory mem, CPtr format, params object[] args)
     {
@@ -79,15 +80,19 @@ public static class CStdLib
         {
             if (fmt[i] != '%') { sb.Append(fmt[i]); continue; }
             i++;
+            while (i < fmt.Length && "-+ #0123456789.lhLjztZ".IndexOf(fmt[i]) >= 0) i++; // skip flags/width/precision/length
             if (i >= fmt.Length) break;
+
+            object Next() => args[argIndex++];
             switch (fmt[i])
             {
                 case '%': sb.Append('%'); break;
-                case 'd': case 'i': sb.Append(Convert.ToInt64(args[argIndex++], CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture)); break;
-                case 'u': sb.Append(Convert.ToUInt64(args[argIndex++], CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture)); break;
-                case 'x': sb.Append(Convert.ToInt64(args[argIndex++], CultureInfo.InvariantCulture).ToString("x", CultureInfo.InvariantCulture)); break;
-                case 'c': sb.Append((char)(byte)Convert.ToInt32(args[argIndex++], CultureInfo.InvariantCulture)); break;
-                case 's': sb.Append(ReadCString(mem, (CPtr)args[argIndex++])); break;
+                case 'd': case 'i': sb.Append(Convert.ToInt64(Next(), CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture)); break;
+                case 'u': sb.Append(Convert.ToUInt64(Next(), CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture)); break;
+                case 'x': sb.Append(Convert.ToInt64(Next(), CultureInfo.InvariantCulture).ToString("x", CultureInfo.InvariantCulture)); break;
+                case 'f': case 'F': sb.Append(Convert.ToDouble(Next(), CultureInfo.InvariantCulture).ToString("F6", CultureInfo.InvariantCulture)); break;
+                case 'c': sb.Append((char)(byte)Convert.ToInt32(Next(), CultureInfo.InvariantCulture)); break;
+                case 's': sb.Append(ReadCString(mem, (CPtr)Next())); break;
                 default: sb.Append('%').Append(fmt[i]); break;
             }
         }
