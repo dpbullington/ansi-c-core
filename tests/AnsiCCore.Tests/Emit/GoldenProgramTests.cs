@@ -13,16 +13,19 @@ public class GoldenProgramTests
 {
     private static bool Update => Environment.GetEnvironmentVariable("UPDATE_GOLDENS") == "1";
 
-    /// <summary>Locates the source <c>Programs/</c> directory by walking up to the test project.</summary>
-    private static string ProgramsDir()
+    private static string ProjectDir()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "AnsiCCore.Tests.csproj")))
             dir = dir.Parent;
-        if (dir is null)
-            throw new InvalidOperationException("could not locate AnsiCCore.Tests project directory");
-        return Path.Combine(dir.FullName, "Programs");
+        return dir?.FullName ?? throw new InvalidOperationException("could not locate AnsiCCore.Tests project directory");
     }
+
+    /// <summary>The source <c>Programs/</c> directory, located by walking up to the test project.</summary>
+    private static string ProgramsDir() => Path.Combine(ProjectDir(), "Programs");
+
+    /// <summary>The stub C standard-library headers programs may <c>#include</c>.</summary>
+    private static string IncludeDir() => Path.Combine(ProjectDir(), "Include");
 
     public static IEnumerable<string> ProgramNames()
         => Directory.EnumerateFiles(ProgramsDir(), "*.c").Select(Path.GetFileName)!.OrderBy(n => n, StringComparer.Ordinal)!;
@@ -34,7 +37,8 @@ public class GoldenProgramTests
         string source = File.ReadAllText(path);
         int expectedExit = ParseExpectedExit(source);
 
-        var (exit, output) = EmitTestHost.RunWithOutput(source);
+        string csharp = EmitTestHost.TranspileWithDriver(source, path, [IncludeDir()]);
+        var (exit, output) = EmitTestHost.RunCSharpWithOutput(csharp);
 
         string outPath = path + ".out";
         if (Update)
@@ -52,7 +56,7 @@ public class GoldenProgramTests
     public void EmittedCSharpMatchesSnapshot(string name)
     {
         string path = Path.Combine(ProgramsDir(), name);
-        string csharp = EmitTestHost.Transpile(File.ReadAllText(path));
+        string csharp = EmitTestHost.TranspileWithDriver(File.ReadAllText(path), path, [IncludeDir()]);
 
         string snapshotPath = path + ".cs";
         if (Update)
@@ -67,7 +71,8 @@ public class GoldenProgramTests
 
     private static int ParseExpectedExit(string source)
     {
-        var match = Regex.Match(source, @"//\s*exit:\s*(-?\d+)");
+        // A "/* exit: N */" comment (C89-style; line comments are off by default).
+        var match = Regex.Match(source, @"/\*\s*exit:\s*(-?\d+)\s*\*/");
         return match.Success ? int.Parse(match.Groups[1].Value) : 0;
     }
 

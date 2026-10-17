@@ -1,4 +1,5 @@
 using System.Reflection;
+using AnsiCCore.Driver;
 using AnsiCCore.Emit;
 using AnsiCCore.Frontend.Diagnostics;
 using AnsiCCore.Frontend.Lexing;
@@ -35,10 +36,23 @@ internal static class EmitTestHost
         return CSharpEmitter.Emit(unit, model);
     }
 
-    /// <summary>Transpiles, compiles, and runs the program; returns C <c>main</c>'s exit code.</summary>
-    public static int Run(string cSource)
+    /// <summary>
+    /// Transpiles through the full driver (preprocessor + include resolution + analysis + emit),
+    /// so programs may use <c>#include</c> and macros. Asserts there were no errors.
+    /// </summary>
+    public static string TranspileWithDriver(string cSource, string path, IEnumerable<string> includeDirs)
     {
-        string csharp = Transpile(cSource);
+        var options = new DriverOptions { IncludeDirectories = [.. includeDirs], EmitCSharp = true };
+        var result = new TranspilerDriver(options).RunSource(cSource, path);
+
+        var errors = result.Diagnostics.Where(d => d.Severity == CSeverity.Error).ToList();
+        Assert.That(errors, Is.Empty, () => "C diagnostics: " + string.Join("; ", errors));
+        return result.EmittedCSharp ?? throw new AssertionException("driver produced no C#");
+    }
+
+    /// <summary>Compiles already-emitted C# and runs its entry point, returning the exit code.</summary>
+    public static int RunCSharp(string csharp)
+    {
         var tree = CSharpSyntaxTree.ParseText(csharp);
         var compilation = CSharpCompilation.Create(
             "Emitted",
@@ -61,22 +75,27 @@ internal static class EmitTestHost
         return value is int code ? code : 0;
     }
 
-    /// <summary>Runs the program and returns both its exit code and whatever it wrote to stdout.</summary>
-    public static (int Exit, string Output) RunWithOutput(string cSource)
+    /// <summary>Transpiles, compiles, and runs the program; returns C <c>main</c>'s exit code.</summary>
+    public static int Run(string cSource) => RunCSharp(Transpile(cSource));
+
+    /// <summary>Compiles and runs already-emitted C#, capturing both exit code and stdout.</summary>
+    public static (int Exit, string Output) RunCSharpWithOutput(string csharp)
     {
         var original = Console.Out;
         var captured = new StringWriter();
         Console.SetOut(captured);
         try
         {
-            int exit = Run(cSource);
-            return (exit, captured.ToString());
+            return (RunCSharp(csharp), captured.ToString());
         }
         finally
         {
             Console.SetOut(original);
         }
     }
+
+    /// <summary>Runs the program (inline path) and returns both its exit code and stdout.</summary>
+    public static (int Exit, string Output) RunWithOutput(string cSource) => RunCSharpWithOutput(Transpile(cSource));
 
     private static MetadataReference[] BuildReferences()
     {

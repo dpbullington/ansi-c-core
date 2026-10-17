@@ -24,7 +24,7 @@ public sealed partial class CSharpEmitter
         ConditionalExpression c => $"({EmitCondition(c.Condition)} ? {EmitValue(c.WhenTrue)} : {EmitValue(c.WhenFalse)})",
         AssignmentExpression a => EmitAssignmentValue(a),
         CommaExpression comma => $"Comma({EmitValue(comma.Left)}, {EmitValue(comma.Right)})",
-        CallExpression call => EmitCall(call),
+        CallExpression call => EmitCallValue(call),
         CastExpression cast => EmitCast(cast),
         IndexExpression idx => EmitLvalueValue(idx),
         MemberExpression m => EmitLvalueValue(m),
@@ -314,6 +314,21 @@ public sealed partial class CSharpEmitter
 
     // --- calls (user + libc shims) ---------------------------------------
 
+    private static readonly HashSet<string> IntegerReturningLibc =
+        new(StringComparer.Ordinal) { "printf", "putchar", "puts", "strcmp", "memcmp", "strlen" };
+
+    /// <summary>Emits a call in value position, reconciling an integer-returning libc shim's C# type with the model's.</summary>
+    private string EmitCallValue(CallExpression call)
+    {
+        string raw = EmitCall(call);
+        if (call.Callee is IdentifierExpression callee && !_userFunctions.Contains(callee.Name)
+            && IntegerReturningLibc.Contains(callee.Name)
+            && _model.TypeOf(call)?.Type.Type is { } rt && rt is IntegerType or EnumType)
+            return $"unchecked(({TypeMapper.Map(rt)})({raw}))";
+        return raw;
+    }
+
+    /// <summary>Emits the bare call expression (a valid C# statement-expression): a libc shim or a user call.</summary>
     private string EmitCall(CallExpression call)
     {
         if (call.Callee is IdentifierExpression callee && !_userFunctions.Contains(callee.Name)
@@ -415,8 +430,8 @@ public sealed partial class CSharpEmitter
         {
             case AssignmentExpression a:
                 return EmitStore(a); // bare: either "L = v" or a "__mem.StoreX(...)" call, both valid statements
-            case CallExpression:
-                return EmitValue(e);
+            case CallExpression call:
+                return EmitCall(call); // bare call (value discarded); avoids an invalid cast-expression statement
             case PostfixExpression p:
                 return EmitIncDecStatement(p.Operand, p.Operator);
             case UnaryExpression { Operator: TokenKind.PlusPlus or TokenKind.MinusMinus } u:
