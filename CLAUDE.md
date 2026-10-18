@@ -21,12 +21,16 @@ The central design pillar shaping nearly every decision:
   hardest part of the project — treat the runtime memory model as a first-class design
   artifact, not an implementation detail.
 
-**Deferred: CLR interop.** An earlier design called for reaching .NET types/APIs through a
-COM-style late-bound dispatch model (instantiate by name, invoke methods/properties
-dynamically). **This is dropped for now** — do not build toward it. The pipeline currently
-targets self-contained C translation (standard-library behavior via `Runtime` shims), and
-the interop problem will be revisited later. Don't add late-binding/dynamic-dispatch
-machinery to Emit or Runtime until this decision is reversed.
+**Interop: static link-time binding (built), dynamic dispatch (deferred).** The supported way
+to reach .NET code is *static linking*: a precompiled static method marked `[CExport("name")]`
+implements a C function, and Emit resolves a call to a declared-but-undefined C function
+(an `extern` prototype) directly to that method via an `ExportRegistry` reflected from the
+linked assemblies — the managed analog of a link-time object. This is resolved at transpile
+time. The C standard-library shims (`CStdLib`) are just the default linked library, so libc and
+user libraries share one mechanism. **Still deferred:** the COM-style *late-bound/dynamic*
+dispatch model (instantiate by name, invoke methods/properties dynamically). Don't build
+late-binding/dynamic-dispatch machinery until that separate decision is reversed; static
+`[CExport]` linking is not that and is the intended extension point.
 
 ## Toolchain
 
@@ -77,13 +81,14 @@ C source ─► Frontend ─► Semantics ─► Emit ─► C# source (+ Runtim
   the emitter can translate without re-deriving C semantics.
 - **`src/AnsiCCore.Emit`** — translates the analyzed tree into C# source. Owns the memory
   pillar in practice: lowering C memory operations onto the `AnsiCCore.Runtime` memory
-  model. References `Runtime` for the shim type *metadata/names* it emits against.
-  (CLR-interop call generation is deferred — see the pillar note above.)
+  model. References `Runtime` for the shim type *metadata/names* it emits against. Resolves
+  external calls against an `ExportRegistry` (static `[CExport]` linking); dynamic dispatch
+  is still deferred (see the pillar note above).
 - **`src/AnsiCCore.Runtime`** — the runtime library the **emitted** C# depends on: the
   safe memory model (managed analog of the C heap/stack, pointers, pointer arithmetic) and
-  C standard-library shims. This is the one project whose public API is a contract with
-  *generated code*, so treat changes to it as semver-sensitive. (No late-binding/dispatch
-  machinery for now — CLR interop is deferred.)
+  C standard-library shims (`CStdLib`, exported via `[CExport]`). This is the one project
+  whose public API is a contract with *generated code*, so treat changes to it as
+  semver-sensitive. (Static `[CExport]` linking is supported; no *dynamic* dispatch yet.)
 - **`src/AnsiCCore.Driver`** — orchestrates Frontend → Semantics → Emit for a set of
   translation units; owns multi-file / whole-program concerns.
 - **`src/AnsiCCore.Cli`** — argument parsing and process entry point; delegates to Driver.
