@@ -13,18 +13,19 @@ public static class CStdLib
 {
     // --- <stdlib.h> heap --------------------------------------------------
 
-    public static CPtr Malloc(CMemory mem, long size) => mem.Malloc(size);
-    public static CPtr Calloc(CMemory mem, long count, long size) => mem.Calloc(count, size);
-    public static CPtr Realloc(CMemory mem, CPtr ptr, long size) => mem.Realloc(ptr, size);
-    public static void Free(CMemory mem, CPtr ptr) => mem.Free(ptr);
+    [CExport("malloc")] public static CPtr Malloc(CMemory mem, long size) => mem.Malloc(size);
+    [CExport("calloc")] public static CPtr Calloc(CMemory mem, long count, long size) => mem.Calloc(count, size);
+    [CExport("realloc")] public static CPtr Realloc(CMemory mem, CPtr ptr, long size) => mem.Realloc(ptr, size);
+    [CExport("free")] public static void Free(CMemory mem, CPtr ptr) => mem.Free(ptr);
 
     // --- <string.h> -------------------------------------------------------
 
-    public static CPtr Memcpy(CMemory mem, CPtr dst, CPtr src, long n) { mem.Copy(dst, src, n); return dst; }
-    public static CPtr Memmove(CMemory mem, CPtr dst, CPtr src, long n) { mem.Copy(dst, src, n); return dst; }
-    public static CPtr Memset(CMemory mem, CPtr dst, int value, long n) { mem.Set(dst, unchecked((byte)value), n); return dst; }
-    public static int Memcmp(CMemory mem, CPtr a, CPtr b, long n) => Math.Sign(mem.Compare(a, b, n));
+    [CExport("memcpy")] public static CPtr Memcpy(CMemory mem, CPtr dst, CPtr src, long n) { mem.Copy(dst, src, n); return dst; }
+    [CExport("memmove")] public static CPtr Memmove(CMemory mem, CPtr dst, CPtr src, long n) { mem.Copy(dst, src, n); return dst; }
+    [CExport("memset")] public static CPtr Memset(CMemory mem, CPtr dst, int value, long n) { mem.Set(dst, unchecked((byte)value), n); return dst; }
+    [CExport("memcmp")] public static int Memcmp(CMemory mem, CPtr a, CPtr b, long n) => Math.Sign(mem.Compare(a, b, n));
 
+    [CExport("strlen")]
     public static int Strlen(CMemory mem, CPtr s)
     {
         int n = 0;
@@ -32,6 +33,7 @@ public static class CStdLib
         return n;
     }
 
+    [CExport("strcmp")]
     public static int Strcmp(CMemory mem, CPtr a, CPtr b)
     {
         for (long i = 0; ; i++)
@@ -42,6 +44,7 @@ public static class CStdLib
         }
     }
 
+    [CExport("strcpy")]
     public static CPtr Strcpy(CMemory mem, CPtr dst, CPtr src)
     {
         long i = 0;
@@ -52,12 +55,14 @@ public static class CStdLib
 
     // --- <stdio.h> (output subset) ---------------------------------------
 
+    [CExport("putchar")]
     public static int Putchar(CMemory mem, int c)
     {
         Console.Out.Write((char)(byte)c);
         return c & 0xFF;
     }
 
+    [CExport("puts")]
     public static int Puts(CMemory mem, CPtr s)
     {
         Console.Out.Write(ReadCString(mem, s));
@@ -70,6 +75,7 @@ public static class CStdLib
     /// width, and precision are skipped (not applied) and length modifiers (<c>h l L z</c>) are
     /// tolerated. Arguments arrive boxed in declaration order.
     /// </summary>
+    [CExport("printf")]
     public static int Printf(CMemory mem, CPtr format, params object[] args)
     {
         string fmt = ReadCString(mem, format);

@@ -314,26 +314,22 @@ public sealed partial class CSharpEmitter
 
     // --- calls (user + libc shims) ---------------------------------------
 
-    private static readonly HashSet<string> IntegerReturningLibc =
-        new(StringComparer.Ordinal) { "printf", "putchar", "puts", "strcmp", "memcmp", "strlen" };
-
-    /// <summary>Emits a call in value position, reconciling an integer-returning libc shim's C# type with the model's.</summary>
+    /// <summary>Emits a call in value position, reconciling an integer-returning export's C# type with the model's.</summary>
     private string EmitCallValue(CallExpression call)
     {
         string raw = EmitCall(call);
-        if (call.Callee is IdentifierExpression callee && !_userFunctions.Contains(callee.Name)
-            && IntegerReturningLibc.Contains(callee.Name)
-            && _model.TypeOf(call)?.Type.Type is { } rt && rt is IntegerType or EnumType)
-            return $"unchecked(({TypeMapper.Map(rt)})({raw}))";
+        if (ResolveExport(call) is { ReturnsInteger: true } export
+            && _model.TypeOf(call)?.Type.Type is { } rt && rt is IntegerType or EnumType
+            && TypeMapper.Map(rt) != export.ReturnClrType)
+            return $"unchecked(({TypeMapper.Map(rt)})({raw}))"; // reconcile e.g. strlen's int with size_t
         return raw;
     }
 
-    /// <summary>Emits the bare call expression (a valid C# statement-expression): a libc shim or a user call.</summary>
+    /// <summary>Emits the bare call expression: a linked export (via its attribute binding) or a user call.</summary>
     private string EmitCall(CallExpression call)
     {
-        if (call.Callee is IdentifierExpression callee && !_userFunctions.Contains(callee.Name)
-            && LibcShim(callee.Name, call) is { } shim)
-            return shim;
+        if (ResolveExport(call) is { } export)
+            return EmitExportedCall(call, export);
 
         var fnType = _model.TypeOf(call.Callee)?.Type.Type as FunctionType;
         var args = call.Arguments.Select((arg, i) =>
@@ -343,32 +339,41 @@ public sealed partial class CSharpEmitter
         return $"{EmitValue(call.Callee)}({string.Join(", ", args)})";
     }
 
-    /// <summary>Maps a recognized C standard-library call to its runtime shim, or null if unrecognized.</summary>
-    private string? LibcShim(string name, CallExpression call)
-    {
-        var a = call.Arguments;
-        string V(int i) => EmitValue(a[i]);
-        bool N(int count) => a.Count == count;
+    /// <summary>Resolves a call to a linked export, unless the program defines the function itself.</summary>
+    private ExportedFunction? ResolveExport(CallExpression call)
+        => call.Callee is IdentifierExpression callee && !_userFunctions.Contains(callee.Name)
+            ? _exports.Resolve(callee.Name)
+            : null;
 
-        return name switch
+    /// <summary>Marshals the C arguments onto the exported method's parameters and emits the call.</summary>
+    private string EmitExportedCall(CallExpression call, ExportedFunction export)
+    {
+        var parts = new List<string>();
+        if (export.TakesMemory)
+            parts.Add("__mem");
+
+        int fixedCount = export.ParameterClrTypes.Count;
+        for (int i = 0; i < fixedCount && i < call.Arguments.Count; i++)
+            parts.Add(MarshalArgument(export.ParameterClrTypes[i], call.Arguments[i]));
+
+        if (export.IsVariadic)
         {
-            "malloc" when N(1) => $"CStdLib.Malloc(__mem, (long)({V(0)}))",
-            "calloc" when N(2) => $"CStdLib.Calloc(__mem, (long)({V(0)}), (long)({V(1)}))",
-            "realloc" when N(2) => $"CStdLib.Realloc(__mem, {V(0)}, (long)({V(1)}))",
-            "free" when N(1) => $"CStdLib.Free(__mem, {V(0)})",
-            "memcpy" when N(3) => $"CStdLib.Memcpy(__mem, {V(0)}, {V(1)}, (long)({V(2)}))",
-            "memmove" when N(3) => $"CStdLib.Memmove(__mem, {V(0)}, {V(1)}, (long)({V(2)}))",
-            "memset" when N(3) => $"CStdLib.Memset(__mem, {V(0)}, (int)({V(1)}), (long)({V(2)}))",
-            "memcmp" when N(3) => $"CStdLib.Memcmp(__mem, {V(0)}, {V(1)}, (long)({V(2)}))",
-            "strlen" when N(1) => $"CStdLib.Strlen(__mem, {V(0)})",
-            "strcmp" when N(2) => $"CStdLib.Strcmp(__mem, {V(0)}, {V(1)})",
-            "strcpy" when N(2) => $"CStdLib.Strcpy(__mem, {V(0)}, {V(1)})",
-            "putchar" when N(1) => $"CStdLib.Putchar(__mem, {V(0)})",
-            "puts" when N(1) => $"CStdLib.Puts(__mem, {V(0)})",
-            "printf" when a.Count >= 1 =>
-                $"CStdLib.Printf(__mem, {V(0)}, new object[] {{ {string.Join(", ", a.Skip(1).Select(x => $"(object)({EmitValue(x)})"))} }})",
-            _ => null,
-        };
+            var rest = call.Arguments.Skip(fixedCount).Select(a => $"(object)({EmitValue(a)})");
+            parts.Add($"new object[] {{ {string.Join(", ", rest)} }}");
+        }
+
+        return $"{export.DeclaringTypeFullName}.{export.MethodName}({string.Join(", ", parts)})";
+    }
+
+    /// <summary>Converts one C argument to an exported method parameter's CLR type.</summary>
+    private string MarshalArgument(string parameterClrType, Expression arg)
+    {
+        if (parameterClrType.EndsWith("CPtr", StringComparison.Ordinal))
+            return IsNullConstant(arg) ? "CPtr.Null" : EmitValue(arg);
+
+        string value = EmitValue(arg);
+        string? argClr = _model.TypeOf(arg)?.Type is { } t ? TypeMapper.Map(t) : null;
+        return argClr == parameterClrType ? value : $"unchecked(({parameterClrType})({value}))";
     }
 
     private string EmitCast(CastExpression cast)

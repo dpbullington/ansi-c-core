@@ -4,6 +4,7 @@ using AnsiCCore.Emit;
 using AnsiCCore.Frontend.Diagnostics;
 using AnsiCCore.Frontend.Lexing;
 using AnsiCCore.Frontend.Parsing;
+using AnsiCCore.Runtime.Library;
 using AnsiCCore.Runtime.Memory;
 using AnsiCCore.Semantics.Analysis;
 using Microsoft.CodeAnalysis;
@@ -35,6 +36,26 @@ internal static class EmitTestHost
 
         return CSharpEmitter.Emit(unit, model);
     }
+
+    /// <summary>
+    /// Transpiles with <paramref name="linked"/> assemblies added to the import library, so a C
+    /// extern call resolves to a <c>[CExport]</c> method in them. Demonstrates link-time binding.
+    /// </summary>
+    public static string TranspileLinking(string cSource, params Assembly[] linked)
+    {
+        var tokens = new Lexer(cSource, "t.c").Tokenize();
+        var bag = new DiagnosticBag();
+        var unit = new Parser(tokens, bag).ParseTranslationUnit();
+        var model = SemanticAnalyzer.Analyze(unit, bag);
+
+        var errors = bag.Where(d => d.Severity == CSeverity.Error).ToList();
+        Assert.That(errors, Is.Empty, () => "C diagnostics: " + string.Join("; ", errors));
+
+        var registry = ExportRegistry.FromAssemblies(linked.Prepend(typeof(CStdLib).Assembly));
+        return CSharpEmitter.Emit(unit, model, registry);
+    }
+
+    public static int RunLinking(string cSource, params Assembly[] linked) => RunCSharp(TranspileLinking(cSource, linked));
 
     /// <summary>
     /// Transpiles through the full driver (preprocessor + include resolution + analysis + emit),
@@ -104,10 +125,11 @@ internal static class EmitTestHost
             .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
             .ToList();
 
-        // Ensure the runtime the emitted code targets is referenced.
-        string runtimePath = typeof(CMemory).Assembly.Location;
-        if (!tpa.Contains(runtimePath))
-            refs.Add(MetadataReference.CreateFromFile(runtimePath));
+        // Reference the runtime the emitted code targets, plus this test assembly so programs can
+        // link against [CExport] methods defined in the tests.
+        foreach (var path in new[] { typeof(CMemory).Assembly.Location, typeof(EmitTestHost).Assembly.Location })
+            if (!tpa.Contains(path))
+                refs.Add(MetadataReference.CreateFromFile(path));
 
         return [.. refs];
     }
