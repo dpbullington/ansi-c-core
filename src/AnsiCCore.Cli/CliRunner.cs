@@ -124,6 +124,7 @@ public static class CliRunner
         bool dumpTokens = false, dumpAst = false, dumpSymbols = false, dumpCSharp = false;
         var includeDirs = new List<string>();
         var macros = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var linkedAssemblies = new List<string>();
         string? outputDir = null;
         bool allowLineComments = false;
 
@@ -162,6 +163,10 @@ public static class CliRunner
                     if (!TryTakeValue(args, ref i, errWriter, "-D")) return false;
                     AddMacro(macros, args[i]);
                     break;
+                case "--link":
+                    if (!TryTakeValue(args, ref i, errWriter, "--link")) return false;
+                    linkedAssemblies.Add(args[i]);
+                    break;
                 default:
                     if (arg.StartsWith("-I", StringComparison.Ordinal) && arg.Length > 2)
                         includeDirs.Add(arg[2..]);
@@ -182,6 +187,7 @@ public static class CliRunner
         {
             IncludeDirectories = includeDirs,
             PredefinedMacros = macros,
+            LinkedAssemblies = linkedAssemblies,
             OutputDirectory = outputDir,
             AllowLineComments = allowLineComments,
             EmitCSharp = dumpCSharp || outputDir != null,
@@ -217,6 +223,7 @@ public static class CliRunner
         w.WriteLine("  --emit                 print the emitted C# to stdout");
         w.WriteLine("  -I <dir>               add a directory to the #include search path (repeatable)");
         w.WriteLine("  -D <name>[=value]      predefine a macro (repeatable; value defaults to 1)");
+        w.WriteLine("  --link <assembly>      link a .NET assembly's [CExport] methods as C functions (repeatable)");
         w.WriteLine("  --dump-tokens          print the preprocessed token stream");
         w.WriteLine("  --dump-ast             print an outline of the parse tree");
         w.WriteLine("  --dump-symbols         print the resolved global symbol table");

@@ -37,6 +37,10 @@ public sealed class ExportRegistry
     public static ExportRegistry FromAssemblies(params Assembly[] assemblies)
         => FromAssemblies((IEnumerable<Assembly>)assemblies);
 
+    /// <summary>Builds a registry of the default C standard library plus the given linked assemblies.</summary>
+    public static ExportRegistry FromLinkedAssemblies(IEnumerable<Assembly> linked)
+        => FromAssemblies(linked.Prepend(typeof(CStdLib).Assembly));
+
     public static ExportRegistry FromAssemblies(IEnumerable<Assembly> assemblies)
     {
         var map = new Dictionary<string, ExportedFunction>(StringComparer.Ordinal);

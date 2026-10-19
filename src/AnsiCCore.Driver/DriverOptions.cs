@@ -10,6 +10,9 @@ public sealed record DriverOptions
     public IReadOnlyDictionary<string, string?> PredefinedMacros { get; init; }
         = new Dictionary<string, string?>(StringComparer.Ordinal);
 
+    /// <summary>Paths to .NET assemblies to "link" (<c>--link</c>): their <c>[CExport]</c> methods become resolvable C functions.</summary>
+    public IReadOnlyList<string> LinkedAssemblies { get; init; } = [];
+
     /// <summary>Directory to write emitted C# to; null means don't write files.</summary>
     public string? OutputDirectory { get; init; }
 

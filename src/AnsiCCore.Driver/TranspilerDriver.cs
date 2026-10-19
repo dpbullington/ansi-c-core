@@ -1,3 +1,4 @@
+using System.Reflection;
 using AnsiCCore.Emit;
 using AnsiCCore.Frontend.Diagnostics;
 using AnsiCCore.Frontend.Lexing;
@@ -15,8 +16,27 @@ namespace AnsiCCore.Driver;
 public sealed class TranspilerDriver
 {
     private readonly DriverOptions _options;
+    private ExportRegistry? _registry;
+    private readonly List<string> _linkErrors = [];
 
     public TranspilerDriver(DriverOptions? options = null) => _options = options ?? DriverOptions.Default;
+
+    /// <summary>Builds the import library once: default libc plus each successfully loaded <c>--link</c> assembly.</summary>
+    private ExportRegistry GetExportRegistry()
+    {
+        if (_registry is not null) return _registry;
+
+        var assemblies = new List<Assembly>();
+        foreach (var path in _options.LinkedAssemblies)
+        {
+            try { assemblies.Add(Assembly.LoadFrom(Path.GetFullPath(path))); }
+            catch (Exception ex) when (ex is IOException or BadImageFormatException or ArgumentException)
+            {
+                _linkErrors.Add($"cannot link '{path}': {ex.Message}");
+            }
+        }
+        return _registry = ExportRegistry.FromLinkedAssemblies(assemblies);
+    }
 
     /// <summary>Reads and processes each input path from disk.</summary>
     public DriverResult Run(IEnumerable<string> inputPaths)
@@ -74,10 +94,17 @@ public sealed class TranspilerDriver
         // Emit only when requested and the program is semantically sound; surface unsupported
         // constructs as diagnostics.
         string? emitted = null;
-        if (_options.EmitCSharp && !diagnostics.HasErrors)
+        if (_options.EmitCSharp)
         {
-            try { emitted = CSharpEmitter.Emit(ast, model); }
-            catch (EmitException ex) { diagnostics.Error(new SourceLocation(path, 0, 0, 0), $"emit: {ex.Message}"); }
+            var registry = GetExportRegistry();
+            foreach (var error in _linkErrors)
+                diagnostics.Error(new SourceLocation(path, 0, 0, 0), error);
+
+            if (!diagnostics.HasErrors)
+            {
+                try { emitted = CSharpEmitter.Emit(ast, model, registry); }
+                catch (EmitException ex) { diagnostics.Error(new SourceLocation(path, 0, 0, 0), $"emit: {ex.Message}"); }
+            }
         }
 
         return new TranslationUnitResult(path, tokens, ast, model, emitted, diagnostics.ToList());

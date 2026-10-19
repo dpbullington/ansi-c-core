@@ -133,6 +133,33 @@ public class CliRunnerTests
     }
 
     [Test]
+    public void Link_ResolvesExternToExportedMethod()
+    {
+        string path = WriteTempC("extern int triple(int);\nint main(void) { return triple(14); }");
+        string lib = typeof(AnsiCCore.Tests.Emit.DemoLibrary).Assembly.Location;
+        try
+        {
+            var (code, output, _) = Run("--link", lib, "--emit", path);
+            Assert.That(code, Is.EqualTo(0));
+            Assert.That(output, Does.Contain("DemoLibrary.Triple(__mem, 14)"));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Test]
+    public void Link_MissingAssembly_ReportsError()
+    {
+        string path = WriteTempC("int main(void) { return 0; }");
+        try
+        {
+            var (code, _, err) = Run("--link", "/no/such/library.dll", "--emit", path);
+            Assert.That(code, Is.EqualTo(1));
+            Assert.That(err, Does.Contain("cannot link"));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Test]
     public void DefineOption_IsHonored()
     {
         string path = WriteTempC("int a[SIZE];");
