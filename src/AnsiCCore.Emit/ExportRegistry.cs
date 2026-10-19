@@ -98,6 +98,7 @@ public sealed class ExportRegistry
         if (t == typeof(float)) return "float";
         if (t == typeof(double)) return "double";
         if (t == typeof(bool)) return "bool";
+        if (t == typeof(string)) return "string";
         if (t == typeof(object)) return "object";
         if (t == typeof(CPtr)) return "AnsiCCore.Runtime.Memory.CPtr";
         return t.FullName ?? t.Name;

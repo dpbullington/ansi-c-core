@@ -29,6 +29,15 @@ public static class DemoLibrary
 
     [CExport("scale")]
     public static double Scale(CMemory mem, double v, double factor) => v * factor;
+
+    // Richer marshalling: a C char* arrives as a managed string, and a returned managed string
+    // becomes a C char*.
+    [CExport("greet")]
+    public static string Greet(CMemory mem, string name) => "Hi " + name + "!";
+
+    // C int arrives as a bool; a returned bool becomes a C int (0/1).
+    [CExport("is_even")]
+    public static bool IsEven(CMemory mem, int n) => n % 2 == 0;
 }
 
 [TestFixture]
@@ -71,6 +80,26 @@ public class LinkedExportTests
     {
         const string src = "extern double scale(double v, double f);\nint main(void) { return (int)scale(10.5, 4.0); }";
         Assert.That(RunLinked(src), Is.EqualTo(42));
+    }
+
+    [Test]
+    public void StringMarshalling_BothDirections()
+    {
+        // C passes a char* (managed string in), the export returns a managed string (char* out).
+        const string src = """
+            extern char *greet(const char *name);
+            extern int puts(const char *s);
+            int main(void) { puts(greet("Bob")); return 0; }
+            """;
+        var (_, output) = EmitTestHost.RunLinkingWithOutput(src, typeof(DemoLibrary).Assembly);
+        Assert.That(output, Is.EqualTo("Hi Bob!\n"));
+    }
+
+    [Test]
+    public void BoolReturnMarshalling()
+    {
+        const string src = "extern int is_even(int);\nint main(void) { return is_even(10) + is_even(7); }";
+        Assert.That(RunLinked(src), Is.EqualTo(1)); // true(1) + false(0)
     }
 
     [Test]

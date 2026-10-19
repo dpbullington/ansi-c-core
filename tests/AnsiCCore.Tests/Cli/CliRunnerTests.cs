@@ -160,6 +160,48 @@ public class CliRunnerTests
     }
 
     [Test]
+    public void OutputDirectory_GeneratesTurnKeyProject()
+    {
+        string path = WriteTempC("int main(void) { return 0; }");
+        string outDir = Path.Combine(Path.GetTempPath(), $"ansicc_proj_{Guid.NewGuid():N}");
+        try
+        {
+            var (code, _, _) = Run("-o", outDir, path);
+            string csproj = Path.Combine(outDir, "transpiled.csproj");
+            Assert.That(code, Is.EqualTo(0));
+            Assert.That(File.Exists(csproj), Is.True);
+            string content = File.ReadAllText(csproj);
+            Assert.That(content, Does.Contain("<OutputType>Exe</OutputType>"));
+            Assert.That(content, Does.Contain("AnsiCCore.Runtime"));
+        }
+        finally
+        {
+            File.Delete(path);
+            if (Directory.Exists(outDir)) Directory.Delete(outDir, recursive: true);
+        }
+    }
+
+    [Test]
+    public void OutputDirectory_WithLink_ReferencesLinkedAssembly()
+    {
+        string path = WriteTempC("extern int triple(int);\nint main(void) { return triple(14); }");
+        string lib = typeof(AnsiCCore.Tests.Emit.DemoLibrary).Assembly.Location;
+        string outDir = Path.Combine(Path.GetTempPath(), $"ansicc_proj_{Guid.NewGuid():N}");
+        try
+        {
+            var (code, _, _) = Run("--link", lib, "-o", outDir, path);
+            Assert.That(code, Is.EqualTo(0));
+            string content = File.ReadAllText(Path.Combine(outDir, "transpiled.csproj"));
+            Assert.That(content, Does.Contain(Path.GetFileNameWithoutExtension(lib)));
+        }
+        finally
+        {
+            File.Delete(path);
+            if (Directory.Exists(outDir)) Directory.Delete(outDir, recursive: true);
+        }
+    }
+
+    [Test]
     public void DefineOption_IsHonored()
     {
         string path = WriteTempC("int a[SIZE];");

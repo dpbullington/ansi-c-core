@@ -1,6 +1,8 @@
+using System.Text;
 using AnsiCCore.Driver;
 using AnsiCCore.Frontend.Diagnostics;
 using AnsiCCore.Frontend.Lexing;
+using AnsiCCore.Runtime.Memory;
 
 namespace AnsiCCore.Cli;
 
@@ -67,6 +69,10 @@ public static class CliRunner
             }
         }
 
+        // Emit a turn-key project referencing the runtime and any linked libraries.
+        if (options.OutputDirectory != null && result.Units.Any(u => u.EmittedCSharp != null))
+            WriteProjectFile(outWriter, errWriter, options);
+
         return result.Success ? ExitOk : ExitError;
     }
 
@@ -92,6 +98,45 @@ public static class CliRunner
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             errWriter.WriteLine($"ansicc: could not write output for {unit.Path}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Writes a buildable <c>transpiled.csproj</c> next to the emitted <c>.g.cs</c> files, referencing
+    /// the AnsiCCore runtime and every <c>--link</c> assembly by path, so the output directory is a
+    /// ready-to-run project (<c>dotnet run --project &lt;out-dir&gt;</c>).
+    /// </summary>
+    private static void WriteProjectFile(TextWriter outWriter, TextWriter errWriter, DriverOptions options)
+    {
+        var references = new List<string> { typeof(CMemory).Assembly.Location };
+        references.AddRange(options.LinkedAssemblies.Select(Path.GetFullPath));
+
+        var sb = new StringBuilder();
+        sb.AppendLine("<Project Sdk=\"Microsoft.NET.Sdk\">");
+        sb.AppendLine("  <PropertyGroup>");
+        sb.AppendLine("    <OutputType>Exe</OutputType>");
+        sb.AppendLine("    <TargetFramework>net10.0</TargetFramework>");
+        sb.AppendLine("    <Nullable>enable</Nullable>");
+        sb.AppendLine("    <ImplicitUsings>disable</ImplicitUsings>");
+        sb.AppendLine("  </PropertyGroup>");
+        sb.AppendLine("  <ItemGroup>");
+        foreach (var reference in references)
+        {
+            string name = Path.GetFileNameWithoutExtension(reference);
+            sb.AppendLine($"    <Reference Include=\"{name}\"><HintPath>{reference}</HintPath></Reference>");
+        }
+        sb.AppendLine("  </ItemGroup>");
+        sb.AppendLine("</Project>");
+
+        try
+        {
+            string path = Path.Combine(options.OutputDirectory!, "transpiled.csproj");
+            File.WriteAllText(path, sb.ToString());
+            outWriter.WriteLine($"ansicc: wrote {path}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            errWriter.WriteLine($"ansicc: could not write project file: {ex.Message}");
         }
     }
 

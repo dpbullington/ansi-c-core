@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AnsiCCore.Driver\AnsiCCore.Driver.csproj" />
+    <ProjectReference Include="..\AnsiCCore.Runtime\AnsiCCore.Runtime.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

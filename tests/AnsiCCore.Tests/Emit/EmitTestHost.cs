@@ -57,6 +57,9 @@ internal static class EmitTestHost
 
     public static int RunLinking(string cSource, params Assembly[] linked) => RunCSharp(TranspileLinking(cSource, linked));
 
+    public static (int Exit, string Output) RunLinkingWithOutput(string cSource, params Assembly[] linked)
+        => RunCSharpWithOutput(TranspileLinking(cSource, linked));
+
     /// <summary>
     /// Transpiles through the full driver (preprocessor + include resolution + analysis + emit),
     /// so programs may use <c>#include</c> and macros. Asserts there were no errors.

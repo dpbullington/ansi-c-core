@@ -314,11 +314,22 @@ public sealed partial class CSharpEmitter
 
     // --- calls (user + libc shims) ---------------------------------------
 
-    /// <summary>Emits a call in value position, reconciling an integer-returning export's C# type with the model's.</summary>
+    /// <summary>Emits a call in value position, marshalling an export's CLR return type back to the C type.</summary>
     private string EmitCallValue(CallExpression call)
     {
         string raw = EmitCall(call);
-        if (ResolveExport(call) is { ReturnsInteger: true } export
+        if (ResolveExport(call) is not { } export)
+            return raw;
+
+        switch (export.ReturnClrType)
+        {
+            case "string": // managed string -> C char*
+                return $"AnsiCCore.Runtime.Library.CMarshal.FromManaged(__mem, {raw})";
+            case "bool":   // C# bool -> C int 0/1
+                return $"({raw} ? 1 : 0)";
+        }
+
+        if (export.ReturnsInteger
             && _model.TypeOf(call)?.Type.Type is { } rt && rt is IntegerType or EnumType
             && TypeMapper.Map(rt) != export.ReturnClrType)
             return $"unchecked(({TypeMapper.Map(rt)})({raw}))"; // reconcile e.g. strlen's int with size_t
@@ -368,8 +379,15 @@ public sealed partial class CSharpEmitter
     /// <summary>Converts one C argument to an exported method parameter's CLR type.</summary>
     private string MarshalArgument(string parameterClrType, Expression arg)
     {
-        if (parameterClrType.EndsWith("CPtr", StringComparison.Ordinal))
-            return IsNullConstant(arg) ? "CPtr.Null" : EmitValue(arg);
+        switch (parameterClrType)
+        {
+            case not null when parameterClrType.EndsWith("CPtr", StringComparison.Ordinal):
+                return IsNullConstant(arg) ? "CPtr.Null" : EmitValue(arg);
+            case "string": // C char* -> managed string
+                return $"AnsiCCore.Runtime.Library.CMarshal.ToManaged(__mem, {EmitValue(arg)})";
+            case "bool":   // C int -> C# bool
+                return EmitCondition(arg);
+        }
 
         string value = EmitValue(arg);
         string? argClr = _model.TypeOf(arg)?.Type is { } t ? TypeMapper.Map(t) : null;
