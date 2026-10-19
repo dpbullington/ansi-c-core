@@ -157,14 +157,16 @@ public sealed partial class SemanticAnalyzer
     // --- record layout ----------------------------------------------------
 
     /// <summary>
-    /// Computes a struct/union layout with natural alignment and sets each field's offset.
-    /// Simplification: bit-fields occupy their declared type's full storage (no bit packing);
-    /// this is honest-but-approximate and will be revisited with the runtime memory model.
+    /// Computes a struct/union layout with natural alignment, setting each field's byte offset
+    /// (and bit offset for bit-fields) and returning the overall size and alignment. Bit-fields
+    /// are packed little-endian into storage units of their declared type; one that would straddle
+    /// a unit boundary starts a new unit, and a zero-width bit-field rounds to the next unit — a
+    /// common (x86-64-like, implementation-defined) model.
     /// </summary>
     private static (long Size, int Alignment) ComputeLayout(IReadOnlyList<Field> fields, bool isUnion)
     {
-        long offset = 0;
         int align = 1;
+        long bitCursor = 0; // bits from the start of the aggregate
 
         foreach (var field in fields)
         {
@@ -175,20 +177,33 @@ public sealed partial class SemanticAnalyzer
             if (isUnion)
             {
                 field.Offset = 0;
-                offset = Math.Max(offset, fieldSize);
+                field.BitOffset = 0;
+                bitCursor = Math.Max(bitCursor, fieldSize * 8);
+                continue;
+            }
+
+            if (field.BitWidth is { } width)
+            {
+                long unitBits = fieldSize * 8;
+                if (width == 0) { bitCursor = RoundUp(bitCursor, unitBits); continue; } // force next unit
+                if (bitCursor % unitBits + width > unitBits) bitCursor = RoundUp(bitCursor, unitBits);
+                field.BitOffset = (int)(bitCursor % unitBits);
+                field.Offset = (bitCursor - field.BitOffset) / 8;
+                bitCursor += width;
             }
             else
             {
-                offset = RoundUp(offset, fieldAlign);
-                field.Offset = offset;
-                offset += fieldSize;
+                long byteOffset = RoundUp(RoundUp(bitCursor, 8) / 8, fieldAlign);
+                field.Offset = byteOffset;
+                field.BitOffset = 0;
+                bitCursor = (byteOffset + fieldSize) * 8;
             }
         }
 
-        long size = RoundUp(offset, align);
+        long size = RoundUp(RoundUp(bitCursor, 8) / 8, align);
         return (size, align);
     }
 
-    private static long RoundUp(long value, int alignment)
+    private static long RoundUp(long value, long alignment)
         => alignment <= 1 ? value : (value + alignment - 1) / alignment * alignment;
 }

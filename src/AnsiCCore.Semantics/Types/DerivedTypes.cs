@@ -77,7 +77,14 @@ public sealed class Field
     public string? Name { get; }
     public QualType Type { get; }
     public int? BitWidth { get; }
+
+    /// <summary>Byte offset of the field (for a bit-field, of its storage unit).</summary>
     public long Offset { get; internal set; }
+
+    /// <summary>For a bit-field, the bit position within its storage unit; 0 otherwise.</summary>
+    public int BitOffset { get; internal set; }
+
+    public bool IsBitField => BitWidth is not null;
 }
 
 /// <summary>

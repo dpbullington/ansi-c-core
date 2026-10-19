@@ -180,6 +180,49 @@ public sealed class CMemory
     public double StoreDouble(CPtr p, double v) { WriteDouble(p, v); return v; }
     public CPtr StorePointer(CPtr p, CPtr v) { WritePointer(p, v); return v; }
 
+    // --- bit-fields -------------------------------------------------------
+
+    /// <summary>Reads a bit-field: <paramref name="bitWidth"/> bits at <paramref name="bitOffset"/> within a storage unit of <paramref name="unitSize"/> bytes.</summary>
+    public long ReadBitField(CPtr unit, int unitSize, int bitOffset, int bitWidth, bool signed)
+    {
+        ulong bits = (ReadUnit(unit, unitSize) >> bitOffset) & Mask(bitWidth);
+        if (signed && bitWidth > 0 && (bits & (1UL << (bitWidth - 1))) != 0)
+            bits |= ~Mask(bitWidth); // sign-extend
+        return unchecked((long)bits);
+    }
+
+    /// <summary>Writes a bit-field (read-modify-write of its storage unit) and returns the stored value.</summary>
+    public long StoreBitField(CPtr unit, int unitSize, int bitOffset, int bitWidth, bool signed, long value)
+    {
+        ulong mask = Mask(bitWidth) << bitOffset;
+        ulong current = ReadUnit(unit, unitSize);
+        WriteUnit(unit, unitSize, (current & ~mask) | ((unchecked((ulong)value) & Mask(bitWidth)) << bitOffset));
+        return ReadBitField(unit, unitSize, bitOffset, bitWidth, signed);
+    }
+
+    private static ulong Mask(int bits) => bits >= 64 ? ulong.MaxValue : (1UL << bits) - 1;
+
+    private ulong ReadUnit(CPtr p, int size) => size switch
+    {
+        1 => ReadUInt8(p),
+        2 => ReadUInt16(p),
+        4 => ReadUInt32(p),
+        8 => ReadUInt64(p),
+        _ => throw new CMemoryException($"invalid bit-field storage unit size {size}"),
+    };
+
+    private void WriteUnit(CPtr p, int size, ulong value)
+    {
+        switch (size)
+        {
+            case 1: WriteUInt8(p, unchecked((byte)value)); break;
+            case 2: WriteUInt16(p, unchecked((ushort)value)); break;
+            case 4: WriteUInt32(p, unchecked((uint)value)); break;
+            case 8: WriteUInt64(p, value); break;
+            default: throw new CMemoryException($"invalid bit-field storage unit size {size}");
+        }
+    }
+
     // --- bulk operations (memcpy / memmove / memset / memcmp) -------------
 
     /// <summary>Copies <paramref name="count"/> bytes; safe even when the regions overlap (like memmove).</summary>

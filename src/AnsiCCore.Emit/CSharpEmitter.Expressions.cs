@@ -48,10 +48,43 @@ public sealed partial class CSharpEmitter
     /// <summary>Emits the value of an lvalue: a memory read for scalars, or the address for arrays/structs (decay).</summary>
     private string EmitLvalueValue(Expression e)
     {
+        if (AsBitField(e) is { } bf)
+            return $"unchecked(({TypeMapper.Map(bf.FieldType)})__mem.ReadBitField({bf.UnitAddr}, {bf.UnitSize}, {bf.BitOffset}, {bf.BitWidth}, {Bool(bf.Signed)}))";
+
         var type = _model.TypeOf(e)?.Type.Type ?? CTypes.Int;
         if (type is ArrayType or RecordType)
             return EmitAddress(e); // array decays to a pointer; a struct is referred to by address
         return $"__mem.Read{MemoryAccess.Suffix(type)}({EmitAddress(e)})";
+    }
+
+    private static string Bool(bool b) => b ? "true" : "false";
+
+    private readonly record struct BitFieldAccess(string UnitAddr, int UnitSize, int BitOffset, int BitWidth, bool Signed, CType FieldType);
+
+    /// <summary>If <paramref name="e"/> is a bit-field member access, returns how to read/write its storage unit.</summary>
+    private BitFieldAccess? AsBitField(Expression e)
+    {
+        if (e is not MemberExpression m) return null;
+
+        RecordType? record;
+        string baseAddr;
+        if (m.Arrow)
+        {
+            record = (_model.TypeOf(m.Target)?.Type.Type as PointerType)?.Pointee.Type as RecordType;
+            baseAddr = EmitValue(m.Target);
+        }
+        else
+        {
+            record = _model.TypeOf(m.Target)?.Type.Type as RecordType;
+            baseAddr = EmitAddress(m.Target);
+        }
+
+        if (record?.FindField(m.Member) is not { IsBitField: true } field)
+            return null;
+
+        bool signed = field.Type.Type is not IntegerType { IsSigned: false };
+        return new BitFieldAccess($"({baseAddr} + {field.Offset})", (int)MemoryAccess.SizeOf(field.Type.Type),
+            field.BitOffset, field.BitWidth!.Value, signed, field.Type.Type);
     }
 
     private string EmitUnaryValue(UnaryExpression u)
@@ -240,7 +273,10 @@ public sealed partial class CSharpEmitter
     private string EmitAssignmentValue(AssignmentExpression a)
     {
         string store = EmitStore(a);
-        // A memory store is a method call (already a value); a plain-local assignment needs parens as a value.
+        // A bit-field/memory store is a method call (already a value); the bit-field store returns
+        // a long, so cast it to the field type. A plain-local assignment needs parens as a value.
+        if (AsBitField(a.Target) is { } bf)
+            return $"unchecked(({TypeMapper.Map(bf.FieldType)})({store}))";
         return IsMemoryLvalue(a.Target, _model, _plan) ? store : $"({store})";
     }
 
@@ -248,6 +284,14 @@ public sealed partial class CSharpEmitter
     private string EmitStore(AssignmentExpression a)
     {
         var targetType = _model.TypeOf(a.Target)?.Type ?? new QualType(CTypes.Int);
+
+        if (AsBitField(a.Target) is { } bf)
+        {
+            string rhs = a.Operator == TokenKind.Equal
+                ? EmitConvert(new QualType(bf.FieldType), a.Value)
+                : CompoundRhs($"__mem.ReadBitField({bf.UnitAddr}, {bf.UnitSize}, {bf.BitOffset}, {bf.BitWidth}, {Bool(bf.Signed)})", bf.FieldType, a.Operator, a.Value);
+            return $"__mem.StoreBitField({bf.UnitAddr}, {bf.UnitSize}, {bf.BitOffset}, {bf.BitWidth}, {Bool(bf.Signed)}, {rhs})";
+        }
 
         if (IsMemoryLvalue(a.Target, _model, _plan))
         {
@@ -293,6 +337,15 @@ public sealed partial class CSharpEmitter
         var type = _model.TypeOf(operand)?.Type.Type ?? CTypes.Int;
         string sign = op == TokenKind.PlusPlus ? "+" : "-";
         long delta = type is PointerType p ? MemoryAccess.SizeOf(p.Pointee.Type) : 1;
+
+        if (AsBitField(operand) is { } bf)
+        {
+            if (isPostfix)
+                throw new EmitException("postfix ++/-- on a bit-field in a value context is not supported yet");
+            string read = $"__mem.ReadBitField({bf.UnitAddr}, {bf.UnitSize}, {bf.BitOffset}, {bf.BitWidth}, {Bool(bf.Signed)})";
+            string next = $"unchecked(({TypeMapper.Map(bf.FieldType)})({read} {sign} {delta}))";
+            return $"unchecked(({TypeMapper.Map(bf.FieldType)})__mem.StoreBitField({bf.UnitAddr}, {bf.UnitSize}, {bf.BitOffset}, {bf.BitWidth}, {Bool(bf.Signed)}, {next}))";
+        }
 
         if (IsMemoryLvalue(operand, _model, _plan))
         {
@@ -470,6 +523,13 @@ public sealed partial class CSharpEmitter
         var type = _model.TypeOf(operand)?.Type.Type ?? CTypes.Int;
         string sign = op == TokenKind.PlusPlus ? "+" : "-";
         long delta = type is PointerType p ? MemoryAccess.SizeOf(p.Pointee.Type) : 1;
+
+        if (AsBitField(operand) is { } bf)
+        {
+            string read = $"__mem.ReadBitField({bf.UnitAddr}, {bf.UnitSize}, {bf.BitOffset}, {bf.BitWidth}, {Bool(bf.Signed)})";
+            string next = $"unchecked(({TypeMapper.Map(bf.FieldType)})({read} {sign} {delta}))";
+            return $"__mem.StoreBitField({bf.UnitAddr}, {bf.UnitSize}, {bf.BitOffset}, {bf.BitWidth}, {Bool(bf.Signed)}, {next})";
+        }
 
         if (IsMemoryLvalue(operand, _model, _plan))
         {

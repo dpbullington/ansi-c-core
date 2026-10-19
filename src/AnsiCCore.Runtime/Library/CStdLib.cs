@@ -11,6 +11,34 @@ namespace AnsiCCore.Runtime.Library;
 /// </summary>
 public static class CStdLib
 {
+    // --- <ctype.h> (pure; no memory parameter) ----------------------------
+
+    [CExport("isdigit")] public static int IsDigit(int c) => c is >= '0' and <= '9' ? 1 : 0;
+    [CExport("isalpha")] public static int IsAlpha(int c) => c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') ? 1 : 0;
+    [CExport("isalnum")] public static int IsAlnum(int c) => IsDigit(c) != 0 || IsAlpha(c) != 0 ? 1 : 0;
+    [CExport("isspace")] public static int IsSpace(int c) => c is ' ' or '\t' or '\n' or '\r' or '\v' or '\f' ? 1 : 0;
+    [CExport("isupper")] public static int IsUpper(int c) => c is >= 'A' and <= 'Z' ? 1 : 0;
+    [CExport("islower")] public static int IsLower(int c) => c is >= 'a' and <= 'z' ? 1 : 0;
+    [CExport("toupper")] public static int ToUpper(int c) => c is >= 'a' and <= 'z' ? c - 32 : c;
+    [CExport("tolower")] public static int ToLower(int c) => c is >= 'A' and <= 'Z' ? c + 32 : c;
+
+    // --- <stdlib.h> -------------------------------------------------------
+
+    [CExport("abs")] public static int Abs(int n) => n < 0 ? -n : n;
+
+    [CExport("atoi")]
+    public static int Atoi(CMemory mem, CPtr s)
+    {
+        long i = 0;
+        while (IsSpace(mem.ReadUInt8(s + i)) != 0) i++;
+        int sign = 1;
+        byte c = mem.ReadUInt8(s + i);
+        if (c is (byte)'+' or (byte)'-') { if (c == (byte)'-') sign = -1; i++; }
+        int value = 0;
+        while (IsDigit(c = mem.ReadUInt8(s + i)) != 0) { value = value * 10 + (c - '0'); i++; }
+        return sign * value;
+    }
+
     // --- <stdlib.h> heap --------------------------------------------------
 
     [CExport("malloc")] public static CPtr Malloc(CMemory mem, long size) => mem.Malloc(size);
@@ -42,6 +70,39 @@ public static class CStdLib
             if (ca != cb) return ca < cb ? -1 : 1;
             if (ca == 0) return 0;
         }
+    }
+
+    [CExport("strncmp")]
+    public static int Strncmp(CMemory mem, CPtr a, CPtr b, long n)
+    {
+        for (long i = 0; i < n; i++)
+        {
+            byte ca = mem.ReadUInt8(a + i), cb = mem.ReadUInt8(b + i);
+            if (ca != cb) return ca < cb ? -1 : 1;
+            if (ca == 0) return 0;
+        }
+        return 0;
+    }
+
+    [CExport("strchr")]
+    public static CPtr Strchr(CMemory mem, CPtr s, int c)
+    {
+        for (long i = 0; ; i++)
+        {
+            byte ch = mem.ReadUInt8(s + i);
+            if (ch == unchecked((byte)c)) return s + i;
+            if (ch == 0) return CPtr.Null;
+        }
+    }
+
+    [CExport("strcat")]
+    public static CPtr Strcat(CMemory mem, CPtr dst, CPtr src)
+    {
+        long end = Strlen(mem, dst);
+        long i = 0;
+        byte c;
+        do { c = mem.ReadUInt8(src + i); mem.WriteUInt8(dst + end + i, c); i++; } while (c != 0);
+        return dst;
     }
 
     [CExport("strcpy")]
