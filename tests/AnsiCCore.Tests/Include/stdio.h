@@ -17,6 +17,10 @@ int puts(const char *s);
 int fputc(int c, FILE *stream);
 int fputs(const char *s, FILE *stream);
 int getchar(void);
+int fgetc(FILE *stream);
 char *fgets(char *buffer, int size, FILE *stream);
 int scanf(const char *format, ...);
+int fscanf(FILE *stream, const char *format, ...);
+FILE *fopen(const char *path, const char *mode);
+int fclose(FILE *stream);
 #endif
