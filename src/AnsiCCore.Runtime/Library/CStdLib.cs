@@ -114,7 +114,12 @@ public static class CStdLib
         return dst;
     }
 
-    // --- <stdio.h> (output subset) ---------------------------------------
+    // --- <stdio.h> output -------------------------------------------------
+    //
+    // FILE* streams are modeled as sentinel pointers (see the stdout/stderr/stdin macros in the
+    // stub stdio.h): address 1 = stdout, 2 = stderr; anything else falls back to stdout.
+
+    private static TextWriter Writer(CPtr stream) => stream.Address == 2 ? Console.Error : Console.Out;
 
     [CExport("putchar")]
     public static int Putchar(CMemory mem, int c)
@@ -131,13 +136,51 @@ public static class CStdLib
         return 0;
     }
 
-    /// <summary>
-    /// A small <c>printf</c>: supports the <c>%d %i %u %x %c %s %f %%</c> conversions. Flags, field
-    /// width, and precision are skipped (not applied) and length modifiers (<c>h l L z</c>) are
-    /// tolerated. Arguments arrive boxed in declaration order.
-    /// </summary>
+    [CExport("fputc")]
+    public static int Fputc(CMemory mem, int c, CPtr stream)
+    {
+        Writer(stream).Write((char)(byte)c);
+        return c & 0xFF;
+    }
+
+    [CExport("fputs")]
+    public static int Fputs(CMemory mem, CPtr s, CPtr stream)
+    {
+        Writer(stream).Write(ReadCString(mem, s));
+        return 0;
+    }
+
     [CExport("printf")]
     public static int Printf(CMemory mem, CPtr format, params object[] args)
+    {
+        string output = Format(mem, format, args);
+        Console.Out.Write(output);
+        return output.Length;
+    }
+
+    [CExport("fprintf")]
+    public static int Fprintf(CMemory mem, CPtr stream, CPtr format, params object[] args)
+    {
+        string output = Format(mem, format, args);
+        Writer(stream).Write(output);
+        return output.Length;
+    }
+
+    [CExport("sprintf")]
+    public static int Sprintf(CMemory mem, CPtr buffer, CPtr format, params object[] args)
+    {
+        string output = Format(mem, format, args);
+        for (int i = 0; i < output.Length; i++) mem.WriteUInt8(buffer + i, (byte)output[i]);
+        mem.WriteUInt8(buffer + output.Length, 0);
+        return output.Length;
+    }
+
+    /// <summary>
+    /// The shared <c>printf</c>-family formatter: supports the <c>%d %i %u %x %c %s %f %%</c>
+    /// conversions. Flags, field width, and precision are skipped (not applied); length modifiers
+    /// (<c>h l L z</c>) are tolerated. Arguments arrive boxed in declaration order.
+    /// </summary>
+    private static string Format(CMemory mem, CPtr format, object[] args)
     {
         string fmt = ReadCString(mem, format);
         var sb = new StringBuilder();
@@ -163,10 +206,110 @@ public static class CStdLib
                 default: sb.Append('%').Append(fmt[i]); break;
             }
         }
+        return sb.ToString();
+    }
 
-        string output = sb.ToString();
-        Console.Out.Write(output);
-        return output.Length;
+    // --- <stdio.h> input (reads Console.In) -------------------------------
+
+    [CExport("getchar")]
+    public static int Getchar(CMemory mem) => Console.In.Read(); // -1 at end of input == EOF
+
+    [CExport("fgets")]
+    public static CPtr Fgets(CMemory mem, CPtr buffer, int size, CPtr stream)
+    {
+        if (size <= 0) return CPtr.Null;
+        int written = 0;
+        while (written < size - 1)
+        {
+            int ch = Console.In.Read();
+            if (ch < 0) break;
+            mem.WriteUInt8(buffer + written, (byte)ch);
+            written++;
+            if (ch == '\n') break;
+        }
+        if (written == 0) return CPtr.Null; // nothing read (EOF)
+        mem.WriteUInt8(buffer + written, 0);
+        return buffer;
+    }
+
+    /// <summary>
+    /// A small <c>scanf</c>: supports <c>%d %u %c %s %%</c>, with whitespace in the format matching
+    /// optional input whitespace. Arguments are pointers to the storage to fill. Returns the number
+    /// of items assigned (EOF if the stream ends before the first assignment).
+    /// </summary>
+    [CExport("scanf")]
+    public static int Scanf(CMemory mem, CPtr format, params object[] args)
+    {
+        string fmt = ReadCString(mem, format);
+        var input = Console.In;
+        int assigned = 0, argIndex = 0;
+
+        for (int i = 0; i < fmt.Length; i++)
+        {
+            char f = fmt[i];
+            if (char.IsWhiteSpace(f)) { SkipSpace(input); continue; }
+            if (f != '%')
+            {
+                if (input.Peek() == f) input.Read(); // match a literal
+                else break;
+                continue;
+            }
+
+            i++;
+            if (i >= fmt.Length) break;
+            switch (fmt[i])
+            {
+                case '%':
+                    if (input.Peek() == '%') input.Read(); else return assigned;
+                    break;
+                case 'd': case 'u':
+                {
+                    SkipSpace(input);
+                    if (!TryReadLong(input, out long value)) return assigned == 0 ? -1 : assigned;
+                    mem.WriteInt32((CPtr)args[argIndex++], unchecked((int)value));
+                    assigned++;
+                    break;
+                }
+                case 'c':
+                {
+                    int ch = input.Read();
+                    if (ch < 0) return assigned == 0 ? -1 : assigned;
+                    mem.WriteUInt8((CPtr)args[argIndex++], (byte)ch);
+                    assigned++;
+                    break;
+                }
+                case 's':
+                {
+                    SkipSpace(input);
+                    var target = (CPtr)args[argIndex++];
+                    int n = 0, c;
+                    while ((c = input.Peek()) >= 0 && !char.IsWhiteSpace((char)c))
+                        mem.WriteUInt8(target + n++, (byte)input.Read());
+                    if (n == 0) return assigned == 0 ? -1 : assigned;
+                    mem.WriteUInt8(target + n, 0);
+                    assigned++;
+                    break;
+                }
+            }
+        }
+        return assigned;
+    }
+
+    private static void SkipSpace(TextReader input)
+    {
+        int c;
+        while ((c = input.Peek()) >= 0 && char.IsWhiteSpace((char)c)) input.Read();
+    }
+
+    private static bool TryReadLong(TextReader input, out long value)
+    {
+        value = 0;
+        int sign = 1, c = input.Peek();
+        if (c == '+' || c == '-') { if (c == '-') sign = -1; input.Read(); }
+        bool any = false;
+        while ((c = input.Peek()) >= '0' && c <= '9') { value = value * 10 + (input.Read() - '0'); any = true; }
+        value *= sign;
+        return any;
     }
 
     private static string ReadCString(CMemory mem, CPtr s)

@@ -121,6 +121,34 @@ internal static class EmitTestHost
     /// <summary>Runs the program (inline path) and returns both its exit code and stdout.</summary>
     public static (int Exit, string Output) RunWithOutput(string cSource) => RunCSharpWithOutput(Transpile(cSource));
 
+    /// <summary>Compiles and runs already-emitted C# with <paramref name="input"/> on stdin, capturing stdout.</summary>
+    public static (int Exit, string Output) RunCSharpWithIO(string csharp, string input)
+    {
+        var originalOut = Console.Out;
+        var originalIn = Console.In;
+        var captured = new StringWriter();
+        Console.SetOut(captured);
+        Console.SetIn(new StringReader(input));
+        try
+        {
+            return (RunCSharp(csharp), captured.ToString());
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetIn(originalIn);
+        }
+    }
+
+    /// <summary>The stub C standard-library headers directory, located by walking up to the test project.</summary>
+    public static string IncludeDir()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "AnsiCCore.Tests.csproj")))
+            dir = dir.Parent;
+        return Path.Combine(dir?.FullName ?? ".", "Include");
+    }
+
     private static MetadataReference[] BuildReferences()
     {
         var tpa = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator);

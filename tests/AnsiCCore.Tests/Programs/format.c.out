@@ -1,0 +1,3 @@
+[7-hi-Z] len=6
+direct to stdout: 42
+via fputs
