@@ -8,6 +8,9 @@ typedef struct _IO_FILE FILE;
 #define stdout ((FILE *)1)
 #define stderr ((FILE *)2)
 #define EOF (-1)
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 
 int printf(const char *format, ...);
 int fprintf(FILE *stream, const char *format, ...);
@@ -23,4 +26,9 @@ int scanf(const char *format, ...);
 int fscanf(FILE *stream, const char *format, ...);
 FILE *fopen(const char *path, const char *mode);
 int fclose(FILE *stream);
+size_t fread(void *ptr, size_t size, size_t count, FILE *stream);
+size_t fwrite(const void *ptr, size_t size, size_t count, FILE *stream);
+int fseek(FILE *stream, long offset, int whence);
+long ftell(FILE *stream);
+void rewind(FILE *stream);
 #endif

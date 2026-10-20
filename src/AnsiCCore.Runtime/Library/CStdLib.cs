@@ -125,11 +125,51 @@ public static class CStdLib
     {
         public enum Std { None, In, Out, Err }
         public Std Standard;
-        public TextReader? Reader;
-        public TextWriter? Writer;
+        public Stream? Stream;             // backing file (null for the standard streams)
+        private const int Empty = -2;
+        private int _peek = Empty;         // one-byte lookahead for files (text parsing)
 
-        public TextWriter? Out => Standard switch { Std.Out => Console.Out, Std.Err => Console.Error, _ => Writer };
-        public TextReader? In => Standard == Std.In ? Console.In : Reader;
+        public int Peek()
+        {
+            if (Standard == Std.In) return Console.In.Peek();
+            if (Stream is null) return -1;
+            if (_peek == Empty) _peek = Stream.ReadByte();
+            return _peek;
+        }
+
+        public int Read()
+        {
+            if (Standard == Std.In) return Console.In.Read();
+            if (Stream is null) return -1;
+            if (_peek != Empty) { int v = _peek; _peek = Empty; return v; }
+            return Stream.ReadByte();
+        }
+
+        public void WriteByte(byte b)
+        {
+            if (Standard == Std.Out) Console.Out.Write((char)b);
+            else if (Standard == Std.Err) Console.Error.Write((char)b);
+            else Stream?.WriteByte(b);
+        }
+
+        public void WriteText(string s)
+        {
+            if (Standard == Std.Out) Console.Out.Write(s);
+            else if (Standard == Std.Err) Console.Error.Write(s);
+            else if (Stream is not null) foreach (char c in s) Stream.WriteByte((byte)c);
+        }
+
+        public long Position => Stream is null ? 0 : Stream.Position - (_peek == Empty ? 0 : 1);
+
+        public bool Seek(long offset, SeekOrigin origin)
+        {
+            if (Stream is null) return false;
+            _peek = Empty;
+            Stream.Seek(offset, origin);
+            return true;
+        }
+
+        public void Dispose() { Stream?.Flush(); Stream?.Dispose(); }
     }
 
     private sealed class StreamTable
@@ -146,8 +186,11 @@ public static class CStdLib
     private static readonly ConditionalWeakTable<CMemory, StreamTable> Streams = new();
     private static StreamTable Table(CMemory mem) => Streams.GetValue(mem, _ => new StreamTable());
 
-    private static TextWriter Writer(CMemory mem, CPtr stream) => Table(mem).Files.GetValueOrDefault(stream.Address)?.Out ?? Console.Out;
-    private static TextReader Reader(CMemory mem, CPtr stream) => Table(mem).Files.GetValueOrDefault(stream.Address)?.In ?? Console.In;
+    private static CFile Handle(CMemory mem, CPtr stream)
+    {
+        var table = Table(mem);
+        return table.Files.GetValueOrDefault(stream.Address) ?? table.Files[1];
+    }
 
     [CExport("fopen")]
     public static CPtr Fopen(CMemory mem, CPtr path, CPtr mode)
@@ -155,17 +198,17 @@ public static class CStdLib
         string file = ReadCString(mem, path), m = ReadCString(mem, mode);
         try
         {
-            CFile handle = m.Length > 0 && m[0] switch { 'r' => true, _ => false }
-                ? new CFile { Reader = new StreamReader(file) }
-                : m.Length > 0 && m[0] == 'a'
-                    ? new CFile { Writer = new StreamWriter(file, append: true) }
-                    : m.Length > 0 && m[0] == 'w'
-                        ? new CFile { Writer = new StreamWriter(file, append: false) }
-                        : throw new IOException($"unsupported fopen mode '{m}'");
+            (FileMode fileMode, FileAccess access) = m.Length == 0 ? default : m[0] switch
+            {
+                'r' => (FileMode.Open, m.Contains('+') ? FileAccess.ReadWrite : FileAccess.Read),
+                'w' => (FileMode.Create, m.Contains('+') ? FileAccess.ReadWrite : FileAccess.Write),
+                'a' => (FileMode.Append, FileAccess.Write),
+                _ => throw new IOException($"unsupported fopen mode '{m}'"),
+            };
 
             var table = Table(mem);
             ulong address = table.Next++;
-            table.Files[address] = handle;
+            table.Files[address] = new CFile { Stream = new FileStream(file, fileMode, access) };
             return new CPtr(address);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
@@ -180,12 +223,48 @@ public static class CStdLib
         var table = Table(mem);
         if (!table.Files.TryGetValue(stream.Address, out var handle) || handle.Standard != CFile.Std.None)
             return -1;
-        handle.Writer?.Flush();
-        handle.Writer?.Dispose();
-        handle.Reader?.Dispose();
+        handle.Dispose();
         table.Files.Remove(stream.Address);
         return 0;
     }
+
+    // --- <stdio.h> binary I/O --------------------------------------------
+
+    [CExport("fread")]
+    public static long Fread(CMemory mem, CPtr ptr, long size, long count, CPtr stream)
+    {
+        var f = Handle(mem, stream);
+        long total = size * count, read = 0;
+        for (; read < total; read++)
+        {
+            int b = f.Read();
+            if (b < 0) break;
+            mem.WriteUInt8(ptr + read, (byte)b);
+        }
+        return size == 0 ? 0 : read / size; // number of complete elements
+    }
+
+    [CExport("fwrite")]
+    public static long Fwrite(CMemory mem, CPtr ptr, long size, long count, CPtr stream)
+    {
+        var f = Handle(mem, stream);
+        long total = size * count;
+        for (long i = 0; i < total; i++) f.WriteByte(mem.ReadUInt8(ptr + i));
+        return count;
+    }
+
+    [CExport("fseek")]
+    public static int Fseek(CMemory mem, CPtr stream, long offset, int whence)
+    {
+        var origin = whence == 1 ? SeekOrigin.Current : whence == 2 ? SeekOrigin.End : SeekOrigin.Begin;
+        return Handle(mem, stream).Seek(offset, origin) ? 0 : -1;
+    }
+
+    [CExport("ftell")]
+    public static long Ftell(CMemory mem, CPtr stream) => Handle(mem, stream).Position;
+
+    [CExport("rewind")]
+    public static void Rewind(CMemory mem, CPtr stream) => Handle(mem, stream).Seek(0, SeekOrigin.Begin);
 
     // --- <stdio.h> output -------------------------------------------------
 
@@ -207,14 +286,14 @@ public static class CStdLib
     [CExport("fputc")]
     public static int Fputc(CMemory mem, int c, CPtr stream)
     {
-        Writer(mem, stream).Write((char)(byte)c);
+        Handle(mem, stream).WriteByte((byte)c);
         return c & 0xFF;
     }
 
     [CExport("fputs")]
     public static int Fputs(CMemory mem, CPtr s, CPtr stream)
     {
-        Writer(mem, stream).Write(ReadCString(mem, s));
+        Handle(mem, stream).WriteText(ReadCString(mem, s));
         return 0;
     }
 
@@ -230,7 +309,7 @@ public static class CStdLib
     public static int Fprintf(CMemory mem, CPtr stream, CPtr format, params object[] args)
     {
         string output = Format(mem, format, args);
-        Writer(mem, stream).Write(output);
+        Handle(mem, stream).WriteText(output);
         return output.Length;
     }
 
@@ -272,22 +351,32 @@ public static class CStdLib
                 else break;
             }
 
+            object Next() => args[argIndex++];
+
             int width = 0;
-            while (i < fmt.Length && char.IsAsciiDigit(fmt[i])) width = width * 10 + (fmt[i++] - '0');
+            if (i < fmt.Length && fmt[i] == '*') // width taken from an argument
+            {
+                i++;
+                width = Convert.ToInt32(Next(), inv);
+                if (width < 0) { left = true; width = -width; }
+            }
+            else
+            {
+                while (i < fmt.Length && char.IsAsciiDigit(fmt[i])) width = width * 10 + (fmt[i++] - '0');
+            }
 
             int precision = -1;
             if (i < fmt.Length && fmt[i] == '.')
             {
                 i++;
-                precision = 0;
-                while (i < fmt.Length && char.IsAsciiDigit(fmt[i])) precision = precision * 10 + (fmt[i++] - '0');
+                if (i < fmt.Length && fmt[i] == '*') { i++; precision = Math.Max(0, Convert.ToInt32(Next(), inv)); }
+                else { precision = 0; while (i < fmt.Length && char.IsAsciiDigit(fmt[i])) precision = precision * 10 + (fmt[i++] - '0'); }
             }
 
             while (i < fmt.Length && "lhLzjt".IndexOf(fmt[i]) >= 0) i++;
             if (i >= fmt.Length) break;
             char conv = fmt[i++];
 
-            object Next() => args[argIndex++];
             string text;
             switch (conv)
             {
@@ -295,12 +384,14 @@ public static class CStdLib
                 case 'd': case 'i': text = FormatSigned(Convert.ToInt64(Next(), inv), plus, space, precision); break;
                 case 'u': text = Pad0(Convert.ToUInt64(Next(), inv).ToString(inv), precision); break;
                 case 'x': text = Pad0(Convert.ToUInt64(Next(), inv).ToString("x", inv), precision); break;
+                case 'o': text = Pad0(ToOctal(Convert.ToUInt64(Next(), inv)), precision); break;
+                case 'p': text = "0x" + ((CPtr)Next()).Address.ToString("x", inv); break;
                 case 'f': case 'F': text = FormatFloat(Convert.ToDouble(Next(), inv), precision < 0 ? 6 : precision, plus, space); break;
                 case 'c': text = ((char)(byte)Convert.ToInt32(Next(), inv)).ToString(); break;
                 case 's': { string s = ReadCString(mem, (CPtr)Next()); text = precision >= 0 && precision < s.Length ? s[..precision] : s; break; }
                 default: sb.Append('%').Append(conv); continue;
             }
-            sb.Append(PadField(text, width, left, zero && conv is 'd' or 'i' or 'u' or 'x' or 'f' or 'F'));
+            sb.Append(PadField(text, width, left, zero && conv is 'd' or 'i' or 'u' or 'x' or 'o' or 'f' or 'F'));
         }
         return sb.ToString();
     }
@@ -320,6 +411,14 @@ public static class CStdLib
 
     private static string Pad0(string digits, int precision) => precision >= 0 ? digits.PadLeft(precision, '0') : digits;
 
+    private static string ToOctal(ulong v)
+    {
+        if (v == 0) return "0";
+        var sb = new StringBuilder();
+        while (v > 0) { sb.Insert(0, (char)('0' + (int)(v & 7))); v >>= 3; }
+        return sb.ToString();
+    }
+
     private static string PadField(string s, int width, bool left, bool zero)
     {
         if (s.Length >= width) return s;
@@ -335,13 +434,13 @@ public static class CStdLib
     public static int Getchar(CMemory mem) => Console.In.Read(); // -1 at end of input == EOF
 
     [CExport("fgetc")]
-    public static int Fgetc(CMemory mem, CPtr stream) => Reader(mem, stream).Read();
+    public static int Fgetc(CMemory mem, CPtr stream) => Handle(mem, stream).Read();
 
     [CExport("fgets")]
     public static CPtr Fgets(CMemory mem, CPtr buffer, int size, CPtr stream)
     {
         if (size <= 0) return CPtr.Null;
-        var input = Reader(mem, stream);
+        var input = Handle(mem, stream);
         int written = 0;
         while (written < size - 1)
         {
@@ -357,17 +456,17 @@ public static class CStdLib
     }
 
     [CExport("scanf")]
-    public static int Scanf(CMemory mem, CPtr format, params object[] args) => RunScanf(mem, Console.In, format, args);
+    public static int Scanf(CMemory mem, CPtr format, params object[] args) => RunScanf(mem, Handle(mem, new CPtr(3)), format, args);
 
     [CExport("fscanf")]
-    public static int Fscanf(CMemory mem, CPtr stream, CPtr format, params object[] args) => RunScanf(mem, Reader(mem, stream), format, args);
+    public static int Fscanf(CMemory mem, CPtr stream, CPtr format, params object[] args) => RunScanf(mem, Handle(mem, stream), format, args);
 
     /// <summary>
     /// A small <c>scanf</c>: supports <c>%d %u %x %f (and %lf) %c %s %%</c> with an optional field
     /// width and assignment suppression (<c>*</c>). Arguments are pointers to the storage to fill;
     /// returns the number of items assigned (EOF if the stream ends before the first assignment).
     /// </summary>
-    private static int RunScanf(CMemory mem, TextReader input, CPtr format, object[] args)
+    private static int RunScanf(CMemory mem, CFile input, CPtr format, object[] args)
     {
         string fmt = ReadCString(mem, format);
         int assigned = 0, argIndex = 0;
@@ -442,13 +541,13 @@ public static class CStdLib
         return assigned;
     }
 
-    private static void SkipSpace(TextReader input)
+    private static void SkipSpace(CFile input)
     {
         int c;
         while ((c = input.Peek()) >= 0 && char.IsWhiteSpace((char)c)) input.Read();
     }
 
-    private static bool TryReadInteger(TextReader input, int maxWidth, int radix, out long value)
+    private static bool TryReadInteger(CFile input, int maxWidth, int radix, out long value)
     {
         value = 0;
         int read = 0, sign = 1, c = input.Peek();
@@ -479,7 +578,7 @@ public static class CStdLib
         return v >= 0 && v < radix ? v : -1;
     }
 
-    private static bool TryReadDouble(TextReader input, int maxWidth, out double value)
+    private static bool TryReadDouble(CFile input, int maxWidth, out double value)
     {
         var sb = new StringBuilder();
         int read = 0, c;
