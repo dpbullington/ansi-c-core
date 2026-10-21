@@ -511,7 +511,9 @@ public sealed partial class CSharpEmitter
         return target.Type switch
         {
             null => throw new EmitException("cast target type was not resolved"),
-            VoidType => throw new EmitException("cast to void is not supported yet"),
+            // (void)expr discards the value: emit the operand so it is still evaluated for its side
+            // effects; the surrounding context (comma operand, statement) throws the result away.
+            VoidType => EmitValue(cast.Operand),
             PointerType when IsNullConstant(cast.Operand) => "CPtr.Null",
             PointerType when source is PointerType or ArrayType => EmitValue(cast.Operand),
             PointerType => $"new CPtr(unchecked((ulong)({EmitValue(cast.Operand)})))", // integer -> pointer
@@ -554,12 +556,18 @@ public sealed partial class CSharpEmitter
     private bool IsNullConstant(Expression e)
         => e is IntegerLiteral i && DecodeInteger(i.Text) == 0;
 
+    /// <summary>True for a <c>(void)expr</c> cast, whose result is discarded.</summary>
+    private bool IsVoidCast(CastExpression cast)
+        => _model.ResolvedTypeNames.GetValueOrDefault(cast.Type).Type is VoidType;
+
     // --- statement-expression / for-clause forms -------------------------
 
     private string EmitStatementExpression(Expression e)
     {
         switch (e)
         {
+            case CastExpression cast when IsVoidCast(cast):
+                return EmitStatementExpression(cast.Operand); // (void)expr as a statement: just evaluate expr
             case AssignmentExpression a:
                 return EmitStore(a); // bare: either "L = v" or a "__mem.StoreX(...)" call, both valid statements
             case CallExpression call:

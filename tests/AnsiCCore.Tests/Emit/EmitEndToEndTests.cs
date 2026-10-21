@@ -15,6 +15,54 @@ public class EmitEndToEndTests
         => ExitsWith(42, "int main(void) { return 42; }");
 
     [Test]
+    public void VoidCast_DiscardsValueButKeepsSideEffects()
+    {
+        // (void)expr evaluates expr for its side effects (the increment) and discards the result.
+        const string src = """
+            int main(void)
+            {
+                int x = 0;
+                (void)(x = x + 7);
+                (void)42;
+                return x;
+            }
+            """;
+        ExitsWith(7, src);
+    }
+
+    [Test]
+    public void VoidCast_OnCallStatement_StillInvokes()
+    {
+        // The classic "explicitly ignore the return value" idiom must still run the call.
+        const string src = """
+            int side(int *p) { *p = *p + 5; return *p; }
+            int main(void)
+            {
+                int x = 10;
+                (void)side(&x);
+                return x;
+            }
+            """;
+        ExitsWith(15, src);
+    }
+
+    [Test]
+    public void VoidCast_InForClauseAndComma()
+    {
+        const string src = """
+            int main(void)
+            {
+                int i;
+                int n = 0;
+                for (i = 0; i < 5; (void)i, i = i + 1)
+                    n = n + i;
+                return n; /* 0+1+2+3+4 = 10 */
+            }
+            """;
+        ExitsWith(10, src);
+    }
+
+    [Test]
     public void ArithmeticPrecedence()
         => ExitsWith(14, "int main(void) { return 2 + 3 * 4; }");
 

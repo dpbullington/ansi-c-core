@@ -13,6 +13,6 @@ void *__va_arg(void **__ap);
    `type` token rides inside an ordinary cast, so no special parsing is required. */
 #define va_start(ap, last) ((ap) = (va_list)__va_start())
 #define va_arg(ap, type)   (*(type *)__va_arg((void **)&(ap)))
-#define va_end(ap)         ((ap) = (va_list)0)
+#define va_end(ap)         ((void)((ap) = (va_list)0))
 
 #endif
