@@ -392,15 +392,71 @@ public sealed partial class CSharpEmitter
     /// <summary>Emits the bare call expression: a linked export (via its attribute binding) or a user call.</summary>
     private string EmitCall(CallExpression call)
     {
+        // The <stdarg.h> va_start macro lowers to __va_start(); it resolves to the current
+        // function's hidden argument-base parameter rather than any real call.
+        if (call.Callee is IdentifierExpression { Name: "__va_start" })
+            return "__va";
+
         if (ResolveExport(call) is { } export)
             return EmitExportedCall(call, export);
 
         var fnType = _model.TypeOf(call.Callee)?.Type.Type as FunctionType;
+        if (fnType is { IsVariadic: true })
+            return EmitVariadicUserCall(call, fnType);
+
         var args = call.Arguments.Select((arg, i) =>
             fnType is { HasPrototype: true } && i < fnType.Parameters.Count
                 ? EmitConvert(fnType.Parameters[i].Type, arg)
                 : EmitValue(arg));
         return $"{EmitValue(call.Callee)}({string.Join(", ", args)})";
+    }
+
+    /// <summary>
+    /// Emits a call to a user-defined variadic function: fixed arguments are converted to their
+    /// declared parameter types, and the remaining arguments are promoted, boxed, and packed into a
+    /// region whose base is passed as the hidden <c>va_list</c> parameter (see <c>CVarArgs.Pack</c>).
+    /// </summary>
+    private string EmitVariadicUserCall(CallExpression call, FunctionType fnType)
+    {
+        int fixedCount = fnType.Parameters.Count;
+        var parts = call.Arguments.Take(fixedCount)
+            .Select((arg, i) => EmitConvert(fnType.Parameters[i].Type, arg))
+            .ToList();
+
+        var packed = new List<string> { "__mem" };
+        packed.AddRange(call.Arguments.Skip(fixedCount).Select(EmitVarArg));
+        parts.Add($"AnsiCCore.Runtime.Library.CVarArgs.Pack({string.Join(", ", packed)})");
+
+        return $"{EmitValue(call.Callee)}({string.Join(", ", parts)})";
+    }
+
+    /// <summary>
+    /// Emits one trailing variadic argument as a boxed value for <c>CVarArgs.Pack</c>, applying the
+    /// C default argument promotions (sub-int integers → int, float → double).
+    /// </summary>
+    private string EmitVarArg(Expression arg)
+    {
+        var type = _model.TypeOf(arg)?.Type.Type;
+        string value = EmitValue(arg);
+        switch (type)
+        {
+            case FloatingType:                 // float and double both pass as double
+                return $"(object)(double)({value})";
+            case PointerType or ArrayType:     // decays to a CPtr
+                return $"(object)({value})";
+            case EnumType:
+                return $"(object)(int)({value})";
+            case IntegerType it:
+                return TypeMapper.Map(it) switch
+                {
+                    "uint" => $"(object)(uint)({value})",
+                    "long" => $"(object)(long)({value})",
+                    "ulong" => $"(object)(ulong)({value})",
+                    _ => $"(object)(int)({value})", // char/short/int all promote to int
+                };
+            default:
+                throw new EmitException($"cannot pass value of type '{type?.Display ?? "?"}' as a variadic argument");
+        }
     }
 
     /// <summary>Resolves a call to a linked export, unless the program defines the function itself.</summary>

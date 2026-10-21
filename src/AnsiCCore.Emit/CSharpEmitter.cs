@@ -165,6 +165,9 @@ public sealed partial class CSharpEmitter
 
     // --- functions --------------------------------------------------------
 
+    /// <summary>Name of the hidden base-pointer parameter injected into variadic functions.</summary>
+    private const string VaListParam = "__va";
+
     private void EmitFunction(FunctionDefinition f)
     {
         if (!_model.SymbolsByNode.TryGetValue(f, out var symbol) || symbol.Type.Type is not FunctionType ft)
@@ -174,8 +177,13 @@ public sealed partial class CSharpEmitter
 
         string returnType = TypeMapper.Map(ft.ReturnType);
         string name = SymbolName(symbol);
-        string parameters = string.Join(", ", ft.Parameters.Select(p =>
-            $"{TypeMapper.Map(p.Type)} {Naming.Safe(p.Name ?? "_")}"));
+        var paramList = ft.Parameters
+            .Select(p => $"{TypeMapper.Map(p.Type)} {Naming.Safe(p.Name ?? "_")}")
+            .ToList();
+        // A variadic function takes a hidden base pointer to its promoted-argument region, which
+        // the <stdarg.h> macros read through. (See CVarArgs / stdarg.h.)
+        if (ft.IsVariadic) paramList.Add($"CPtr {VaListParam}");
+        string parameters = string.Join(", ", paramList);
 
         Line($"private static {returnType} {name}({parameters})");
 
@@ -188,6 +196,7 @@ public sealed partial class CSharpEmitter
         _switchCaseLabels = null;
         foreach (var p in ft.Parameters.Where(p => p.Name is not null))
             _usedNames.Add(Naming.Safe(p.Name!));
+        if (ft.IsVariadic) _usedNames.Add(VaListParam);
 
         OpenBrace();
         EmitParameterSpilling(f, ft);
