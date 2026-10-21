@@ -265,15 +265,7 @@ public sealed partial class CSharpEmitter
         {
             Line("private static int Main()");
             OpenBrace();
-            if (returnsVoid)
-            {
-                Line("main();");
-                Line("return 0;");
-            }
-            else
-            {
-                Line("return unchecked((int)main());");
-            }
+            EmitMainInvocation("main()", returnsVoid);
             CloseBrace();
             return;
         }
@@ -289,17 +281,34 @@ public sealed partial class CSharpEmitter
         Line("__argv[0] = \"program\";");
         Line("System.Array.Copy(args, 0, __argv, 1, args.Length);");
         Line("CPtr __argvPtr = AnsiCCore.Runtime.Library.CMarshal.BuildArgv(__mem, __argv);");
-        string call = $"main(__argv.Length, __argvPtr)";
+        EmitMainInvocation("main(__argv.Length, __argvPtr)", returnsVoid);
+        CloseBrace();
+    }
+
+    /// <summary>
+    /// Emits the body that calls C <c>main</c>: a normal return runs the <c>atexit</c> handlers
+    /// (C89 §5.1.2.2.3), <c>exit</c> unwinds with its status, and <c>abort</c> maps to a conventional
+    /// failure code (128 + SIGABRT).
+    /// </summary>
+    private void EmitMainInvocation(string call, bool returnsVoid)
+    {
+        Line("try");
+        OpenBrace();
         if (returnsVoid)
         {
             Line($"{call};");
+            Line("AnsiCCore.Runtime.Library.CProcess.RunAtExit(__mem);");
             Line("return 0;");
         }
         else
         {
-            Line($"return unchecked((int){call});");
+            Line($"int __code = unchecked((int){call});");
+            Line("AnsiCCore.Runtime.Library.CProcess.RunAtExit(__mem);");
+            Line("return __code;");
         }
         CloseBrace();
+        Line("catch (AnsiCCore.Runtime.Library.CExitException __e) { return __e.Code; }");
+        Line("catch (AnsiCCore.Runtime.Library.CAbortException) { return 134; }");
     }
 
     /// <summary>True for the <c>main(int argc, char **argv)</c> signature (argv already adjusted to a pointer).</summary>

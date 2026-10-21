@@ -491,6 +491,9 @@ public sealed partial class CSharpEmitter
     {
         switch (parameterClrType)
         {
+            case not null when parameterClrType.StartsWith("System.Action", StringComparison.Ordinal)
+                            || parameterClrType.StartsWith("System.Func", StringComparison.Ordinal):
+                return IsNullConstant(arg) ? "null" : EmitValue(arg); // C function pointer -> delegate / method group
             case not null when parameterClrType.EndsWith("CPtr", StringComparison.Ordinal):
                 return IsNullConstant(arg) ? "CPtr.Null" : EmitValue(arg);
             case "string": // C char* -> managed string

@@ -40,6 +40,126 @@ public static class CStdLib
         return sign * value;
     }
 
+    // --- <stdlib.h> numeric conversion ------------------------------------
+
+    [CExport("atol")] public static long Atol(CMemory mem, CPtr s) => StrtoL(mem, s, CPtr.Null, 10);
+    [CExport("atof")] public static double Atof(CMemory mem, CPtr s) => Strtod(mem, s, CPtr.Null);
+
+    /// <summary>
+    /// <c>strtol</c>: parses a long in <paramref name="radix"/> (0 auto-detects <c>0x</c>/<c>0</c>
+    /// prefixes), skipping leading whitespace and an optional sign, clamping to the long range on
+    /// overflow. When <paramref name="endptr"/> is non-null it receives the first unconsumed char.
+    /// </summary>
+    [CExport("strtol")]
+    public static long StrtoL(CMemory mem, CPtr s, CPtr endptr, int radix)
+    {
+        ulong magnitude = ParseInteger(mem, s, radix, out bool negative, out long consumed, out bool any);
+        if (endptr != CPtr.Null) mem.WritePointer(endptr, s + (any ? consumed : 0));
+        if (negative)
+            return magnitude >= 0x8000000000000000UL ? long.MinValue : -(long)magnitude;
+        return magnitude > long.MaxValue ? long.MaxValue : (long)magnitude;
+    }
+
+    /// <summary><c>strtoul</c>: like <see cref="StrtoL"/> but unsigned (a leading '-' negates modulo 2^64).</summary>
+    [CExport("strtoul")]
+    public static ulong StrtoUL(CMemory mem, CPtr s, CPtr endptr, int radix)
+    {
+        ulong magnitude = ParseInteger(mem, s, radix, out bool negative, out long consumed, out bool any);
+        if (endptr != CPtr.Null) mem.WritePointer(endptr, s + (any ? consumed : 0));
+        return negative ? unchecked(0UL - magnitude) : magnitude;
+    }
+
+    /// <summary><c>strtod</c>: parses a double prefix (optional sign, digits, fraction, exponent).</summary>
+    [CExport("strtod")]
+    public static double Strtod(CMemory mem, CPtr s, CPtr endptr)
+    {
+        long i = 0;
+        while (IsSpace(mem.ReadUInt8(s + i)) != 0) i++;
+        var sb = new StringBuilder();
+
+        byte c = mem.ReadUInt8(s + i);
+        if (c is (byte)'+' or (byte)'-') { sb.Append((char)c); i++; }
+        bool anyDigits = false;
+        while (IsDigit(c = mem.ReadUInt8(s + i)) != 0) { sb.Append((char)c); i++; anyDigits = true; }
+        if (mem.ReadUInt8(s + i) == (byte)'.')
+        {
+            sb.Append('.'); i++;
+            while (IsDigit(c = mem.ReadUInt8(s + i)) != 0) { sb.Append((char)c); i++; anyDigits = true; }
+        }
+        if (anyDigits && (mem.ReadUInt8(s + i) is (byte)'e' or (byte)'E'))
+        {
+            long mark = i; var exp = new StringBuilder("e"); i++;
+            byte sign = mem.ReadUInt8(s + i);
+            if (sign is (byte)'+' or (byte)'-') { exp.Append((char)sign); i++; }
+            bool expDigits = false;
+            while (IsDigit(c = mem.ReadUInt8(s + i)) != 0) { exp.Append((char)c); i++; expDigits = true; }
+            if (expDigits) sb.Append(exp); else i = mark; // a bare 'e' is not part of the number
+        }
+
+        if (!anyDigits) { if (endptr != CPtr.Null) mem.WritePointer(endptr, s); return 0.0; }
+        if (endptr != CPtr.Null) mem.WritePointer(endptr, s + i);
+        return double.TryParse(sb.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double value) ? value : 0.0;
+    }
+
+    /// <summary>Shared integer scanner for strtol/strtoul: returns the magnitude and parse metadata.</summary>
+    private static ulong ParseInteger(CMemory mem, CPtr s, int radix, out bool negative, out long consumed, out bool any)
+    {
+        long i = 0;
+        while (IsSpace(mem.ReadUInt8(s + i)) != 0) i++;
+
+        negative = false;
+        byte c = mem.ReadUInt8(s + i);
+        if (c is (byte)'+' or (byte)'-') { negative = c == (byte)'-'; i++; }
+
+        if (radix == 0)
+        {
+            if (mem.ReadUInt8(s + i) == (byte)'0' && (mem.ReadUInt8(s + i + 1) is (byte)'x' or (byte)'X')) { radix = 16; i += 2; }
+            else if (mem.ReadUInt8(s + i) == (byte)'0') { radix = 8; }
+            else radix = 10;
+        }
+        else if (radix == 16 && mem.ReadUInt8(s + i) == (byte)'0' && (mem.ReadUInt8(s + i + 1) is (byte)'x' or (byte)'X'))
+        {
+            i += 2;
+        }
+
+        ulong value = 0;
+        any = false;
+        int digit;
+        while ((digit = DigitValue(mem.ReadUInt8(s + i))) >= 0 && digit < radix)
+        {
+            value = value * (ulong)radix + (ulong)digit;
+            i++; any = true;
+        }
+        consumed = i;
+        return value;
+    }
+
+    private static int DigitValue(byte c) => c switch
+    {
+        >= (byte)'0' and <= (byte)'9' => c - '0',
+        >= (byte)'a' and <= (byte)'z' => c - 'a' + 10,
+        >= (byte)'A' and <= (byte)'Z' => c - 'A' + 10,
+        _ => -1,
+    };
+
+    // --- <stdlib.h> pseudo-random -----------------------------------------
+
+    // Per-program RNG state (C89 initial seed is 1), isolated by CMemory like the stream table.
+    private static readonly ConditionalWeakTable<CMemory, long[]> RandState = new();
+    private static long[] Seed(CMemory mem) => RandState.GetValue(mem, _ => new long[] { 1 });
+
+    /// <summary><c>rand</c>: the classic portable LCG, yielding values in [0, 32767] (RAND_MAX).</summary>
+    [CExport("rand")]
+    public static int Rand(CMemory mem)
+    {
+        var state = Seed(mem);
+        state[0] = unchecked(state[0] * 1103515245 + 12345);
+        return (int)((ulong)state[0] >> 16) & 0x7fff;
+    }
+
+    [CExport("srand")]
+    public static void Srand(CMemory mem, uint seed) => Seed(mem)[0] = seed;
+
     // --- <stdlib.h> heap --------------------------------------------------
 
     [CExport("malloc")] public static CPtr Malloc(CMemory mem, long size) => mem.Malloc(size);

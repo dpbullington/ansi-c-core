@@ -29,7 +29,14 @@ internal static class CProgram
 
     private static int Main()
     {
-        return unchecked((int)main());
+        try
+        {
+            int __code = unchecked((int)main());
+            AnsiCCore.Runtime.Library.CProcess.RunAtExit(__mem);
+            return __code;
+        }
+        catch (AnsiCCore.Runtime.Library.CExitException __e) { return __e.Code; }
+        catch (AnsiCCore.Runtime.Library.CAbortException) { return 134; }
     }
     static CProgram()
     {
