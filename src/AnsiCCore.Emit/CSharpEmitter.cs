@@ -111,7 +111,7 @@ public sealed partial class CSharpEmitter
                 if (sym.Kind is SymbolKind.Typedef or SymbolKind.Function) continue;
 
                 bool memory = _plan.IsMemoryBacked(sym);
-                string name = Naming.Safe(sym.Name);
+                string name = SymbolName(sym); // mangled for static globals; shared name for externals
                 (symbolsByName.TryGetValue(name, out var list) ? list : symbolsByName[name] = []).Add(sym);
 
                 if (byName.TryGetValue(name, out int idx))
@@ -173,7 +173,7 @@ public sealed partial class CSharpEmitter
             throw new EmitException($"old-style (K&R) function '{symbol.Name}' is not supported yet");
 
         string returnType = TypeMapper.Map(ft.ReturnType);
-        string name = Naming.Safe(symbol.Name);
+        string name = SymbolName(symbol);
         string parameters = string.Join(", ", ft.Parameters.Select(p =>
             $"{TypeMapper.Map(p.Type)} {Naming.Safe(p.Name ?? "_")}"));
 
@@ -287,6 +287,24 @@ public sealed partial class CSharpEmitter
         string field = $"__str{_stringCounter++}";
         _strings.Add((field, bytes));
         return field;
+    }
+
+    // --- symbol naming ----------------------------------------------------
+
+    private readonly Dictionary<Symbol, string> _staticNames = new();
+
+    /// <summary>
+    /// The C# name for a function/global symbol. External-linkage symbols keep their C name (so
+    /// references across files resolve to one member); internal-linkage (static) symbols get a
+    /// unique suffix so same-named statics in different files don't collide.
+    /// </summary>
+    private string SymbolName(Symbol symbol)
+    {
+        if (symbol.Storage != StorageClass.Static)
+            return Naming.Safe(symbol.Name);
+        if (!_staticNames.TryGetValue(symbol, out var name))
+            _staticNames[symbol] = name = $"{Naming.Safe(symbol.Name)}__s{_staticNames.Count}";
+        return name;
     }
 
     // --- local naming -----------------------------------------------------

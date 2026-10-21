@@ -135,22 +135,22 @@ public sealed partial class SemanticAnalyzer
             if (_current.LookupTag(s.Tag) is RecordType existing && existing.IsUnion == s.IsUnion)
                 return existing;
             var forward = new RecordType(s.IsUnion, s.Tag);
-            _current.DeclareTag(s.Tag, forward);
+            TagScope().DeclareTag(s.Tag, forward);
             return forward;
         }
 
         // Definition (with body). Reuse a prior forward declaration in this scope if present.
-        var priorComplete = s.Tag is not null && _current.LookupTagLocal(s.Tag) is RecordType { IsComplete: true } pc && pc.IsUnion == s.IsUnion ? pc : null;
+        var priorComplete = s.Tag is not null && TagScope().LookupTagLocal(s.Tag) is RecordType { IsComplete: true } pc && pc.IsUnion == s.IsUnion ? pc : null;
 
         RecordType record;
-        if (s.Tag is not null && _current.LookupTagLocal(s.Tag) is RecordType local && !local.IsComplete && local.IsUnion == s.IsUnion)
+        if (s.Tag is not null && TagScope().LookupTagLocal(s.Tag) is RecordType local && !local.IsComplete && local.IsUnion == s.IsUnion)
             record = local;
         else if (priorComplete is not null)
             record = priorComplete; // an identical re-definition (e.g. from a shared header) is idempotent
         else
         {
             record = new RecordType(s.IsUnion, s.Tag);
-            if (s.Tag is not null) _current.DeclareTag(s.Tag, record); // declare before members for self-reference
+            if (s.Tag is not null) TagScope().DeclareTag(s.Tag, record); // declare before members for self-reference
         }
 
         var fields = new List<Field>();
@@ -202,7 +202,7 @@ public sealed partial class SemanticAnalyzer
             if (e.Tag is null) { Error(e.Location, "anonymous enum must have a body"); return new EnumType(null); }
             if (_current.LookupTag(e.Tag) is EnumType existing) return existing;
             var forward = new EnumType(e.Tag);
-            _current.DeclareTag(e.Tag, forward);
+            TagScope().DeclareTag(e.Tag, forward);
             return forward;
         }
 
@@ -223,7 +223,7 @@ public sealed partial class SemanticAnalyzer
 
         // An identical re-definition (e.g. from a shared header) is idempotent: reuse it and do
         // not re-declare the constants.
-        if (e.Tag is not null && _current.LookupTagLocal(e.Tag) is EnumType { IsComplete: true } prior)
+        if (e.Tag is not null && TagScope().LookupTagLocal(e.Tag) is EnumType { IsComplete: true } prior)
         {
             if (!prior.Constants.SequenceEqual(constants))
                 Error(e.Location, $"redefinition of 'enum {e.Tag}'");
@@ -231,7 +231,7 @@ public sealed partial class SemanticAnalyzer
         }
 
         var enumType = new EnumType(e.Tag);
-        if (e.Tag is not null) _current.DeclareTag(e.Tag, enumType);
+        if (e.Tag is not null) TagScope().DeclareTag(e.Tag, enumType);
         foreach (var (name, value) in constants)
             DeclareOrdinaryChecked(new Symbol(name, SymbolKind.EnumConstant, CTypes.Int, StorageClass.None, e.Location) { EnumValue = value }, _current.IsFileScope);
         enumType.Complete(constants);

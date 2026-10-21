@@ -32,18 +32,31 @@ public sealed partial class SemanticAnalyzer
     private readonly List<(string Label, SourceLocation Location)> _gotos = [];
     private QualType? _currentFunctionReturn;
 
+    // Multi-file: external symbols, tags, typedefs, and enum constants live in the shared _global
+    // scope; internal-linkage (static) functions/globals live in a per-source-file scope so the
+    // same name in different files stays isolated. _currentFileScope is the file scope for the
+    // item being analyzed; _global is its parent.
+    private readonly Dictionary<int, Scope> _fileScopes = new();
+    private IReadOnlyDictionary<Node, int>? _fileOf;
+    private Scope _currentFileScope;
+
     private SemanticAnalyzer(DiagnosticBag diagnostics)
     {
         _diagnostics = diagnostics;
         _global = new Scope(ScopeKind.File, parent: null);
         _current = _global;
+        _currentFileScope = _global;
     }
 
-    /// <summary>Analyzes a translation unit, returning the populated <see cref="SemanticModel"/>.</summary>
-    public static SemanticModel Analyze(TranslationUnit unit, DiagnosticBag? diagnostics = null)
+    /// <summary>
+    /// Analyzes a translation unit, returning the populated <see cref="SemanticModel"/>.
+    /// <paramref name="fileOf"/> maps each top-level item to its source-file index (for isolating
+    /// static symbols across files); null treats the whole unit as one file.
+    /// </summary>
+    public static SemanticModel Analyze(TranslationUnit unit, DiagnosticBag? diagnostics = null, IReadOnlyDictionary<Node, int>? fileOf = null)
     {
         var bag = diagnostics ?? new DiagnosticBag();
-        var analyzer = new SemanticAnalyzer(bag);
+        var analyzer = new SemanticAnalyzer(bag) { _fileOf = fileOf };
         analyzer.Run(unit);
 
         var model = new SemanticModel(analyzer._global, bag.ToList());
@@ -56,10 +69,22 @@ public sealed partial class SemanticAnalyzer
         return model;
     }
 
+    private Scope FileScope(int index)
+    {
+        if (index == 0 && _fileOf is null) return _global; // single-file: statics share the global scope
+        return _fileScopes.TryGetValue(index, out var s) ? s : _fileScopes[index] = new Scope(ScopeKind.File, _global);
+    }
+
+    /// <summary>Where a tag is declared: the shared global scope at file level (so identical definitions
+    /// across files dedup), or the current block for a local struct/union/enum.</summary>
+    private Scope TagScope() => _current.IsFileScope ? _global : _current;
+
     private void Run(TranslationUnit unit)
     {
         foreach (var item in unit.Items)
         {
+            _currentFileScope = FileScope(_fileOf?.GetValueOrDefault(item) ?? 0);
+            _current = _currentFileScope;
             switch (item)
             {
                 case FunctionDefinition f: AnalyzeFunctionDefinition(f); break;
@@ -131,13 +156,21 @@ public sealed partial class SemanticAnalyzer
         return result;
     }
 
-    /// <summary>Declares a symbol in the current scope, checking C's redeclaration rules.</summary>
+    /// <summary>
+    /// Declares a symbol, checking C's redeclaration rules. At file scope, external-linkage
+    /// symbols go in the shared global scope (so they link across files) while internal-linkage
+    /// (static) ones go in the per-file scope (so the same name in different files is isolated).
+    /// </summary>
     private void DeclareOrdinaryChecked(Symbol symbol, bool fileScope)
     {
-        var existing = _current.LookupOrdinaryLocal(symbol.Name);
+        Scope target = !fileScope ? _current                        // block scope: no linkage
+            : symbol.Storage == StorageClass.Static ? _currentFileScope // internal linkage: file-local
+            : _global;                                              // external linkage / typedefs / enum constants
+
+        var existing = target.LookupOrdinaryLocal(symbol.Name);
         if (existing is null)
         {
-            _current.DeclareOrdinary(symbol);
+            target.DeclareOrdinary(symbol);
             return;
         }
 
@@ -147,7 +180,7 @@ public sealed partial class SemanticAnalyzer
             && existing.Kind is SymbolKind.Variable or SymbolKind.Function or SymbolKind.Typedef
             && TypeOperations.AreCompatible(existing.Type.Type, symbol.Type.Type))
         {
-            if (symbol.IsDefined) _current.DeclareOrdinary(symbol); // a definition supersedes a prior declaration
+            if (symbol.IsDefined) target.DeclareOrdinary(symbol); // a definition supersedes a prior declaration
             return;
         }
 

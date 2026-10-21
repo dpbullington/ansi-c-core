@@ -42,7 +42,7 @@ public sealed partial class CSharpEmitter
             return EmitLvalueValue(id);
         if (sym is not null && _localNames.TryGetValue(sym, out var local))
             return local;
-        return Naming.Safe(id.Name);
+        return sym is not null ? SymbolName(sym) : Naming.Safe(id.Name); // function / global (static-mangled)
     }
 
     /// <summary>Emits the value of an lvalue: a memory read for scalars, or the address for arrays/structs (decay).</summary>
@@ -121,7 +121,7 @@ public sealed partial class CSharpEmitter
                 _model.SymbolsByNode.TryGetValue(id, out var sym);
                 if (sym is not null && _addressOf.TryGetValue(sym, out var a)) return a;
                 if (sym is not null && _globalAddress.TryGetValue(sym, out var g)) return g;
-                if (sym is { Kind: SymbolKind.Function }) return Naming.Safe(id.Name); // &func -> method group (delegate)
+                if (sym is { Kind: SymbolKind.Function }) return SymbolName(sym); // &func -> method group (delegate)
                 throw new EmitException($"cannot take the address of '{id.Name}'");
 
             case UnaryExpression { Operator: TokenKind.Star } u:

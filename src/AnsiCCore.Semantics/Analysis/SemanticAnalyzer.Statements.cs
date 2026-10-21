@@ -33,9 +33,10 @@ public sealed partial class SemanticAnalyzer
         _gotos.Clear();
         _currentFunctionReturn = functionType?.ReturnType ?? baseType;
 
-        // Parameters share the function's top-level block scope.
+        // Parameters share the function's top-level block scope, which nests under the file scope
+        // so the function can see its file's static functions/globals plus the shared externals.
         var previous = _current;
-        _current = new Scope(ScopeKind.Block, _global);
+        _current = new Scope(ScopeKind.Block, _currentFileScope);
         DeclareParameters(f, functionType);
 
         foreach (var item in f.Body.Items)

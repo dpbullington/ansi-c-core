@@ -56,8 +56,10 @@ public sealed class TranspilerDriver
 
         var units = new List<TranslationUnitResult>();
         var items = new List<Node>();
+        var fileOf = new Dictionary<Node, int>();
         SourceLocation start = default;
         bool haveStart = false;
+        int fileIndex = 0;
 
         foreach (var path in inputPaths)
         {
@@ -73,14 +75,16 @@ public sealed class TranspilerDriver
             var tokens = new Preprocessor(resolver, bag, ppOptions).Preprocess(source, path);
             var ast = new Parser(tokens, bag).ParseTranslationUnit();
             if (!haveStart) { start = ast.Location; haveStart = true; }
+            foreach (var item in ast.Items) fileOf[item] = fileIndex;
             items.AddRange(ast.Items);
             units.Add(new TranslationUnitResult(path, tokens, ast, null, null, bag.ToList()));
+            fileIndex++;
         }
 
-        // Analyze and emit the whole program as one unit.
+        // Analyze and emit the whole program as one unit; static symbols stay isolated per file.
         var program = new TranslationUnit(start, items);
         var programDiagnostics = new DiagnosticBag();
-        var model = SemanticAnalyzer.Analyze(program, programDiagnostics);
+        var model = SemanticAnalyzer.Analyze(program, programDiagnostics, fileOf);
 
         string? emitted = null;
         if (_options.EmitCSharp)

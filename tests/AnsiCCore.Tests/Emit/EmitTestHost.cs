@@ -67,17 +67,19 @@ internal static class EmitTestHost
     {
         var bag = new DiagnosticBag();
         var items = new List<Node>();
+        var fileOf = new Dictionary<Node, int>();
         SourceLocation start = default;
         for (int i = 0; i < sources.Length; i++)
         {
             var tokens = new Lexer(sources[i], $"f{i}.c").Tokenize();
             var ast = new Parser(tokens, bag).ParseTranslationUnit();
             if (i == 0) start = ast.Location;
+            foreach (var item in ast.Items) fileOf[item] = i;
             items.AddRange(ast.Items);
         }
 
         var program = new TranslationUnit(start, items);
-        var model = SemanticAnalyzer.Analyze(program, bag);
+        var model = SemanticAnalyzer.Analyze(program, bag, fileOf);
 
         var errors = bag.Where(d => d.Severity == CSeverity.Error).ToList();
         Assert.That(errors, Is.Empty, () => "C diagnostics: " + string.Join("; ", errors));

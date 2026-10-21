@@ -80,6 +80,64 @@ public class EmitMultiFileTests
     }
 
     [Test]
+    public void SameNamedStaticFunctions_StayIsolatedPerFile()
+    {
+        // Both files define a file-local `helper` with internal linkage. They must NOT collide:
+        // each file's caller resolves to its own helper.
+        const string a = """
+            static int helper(void) { return 10; }
+            int from_a(void) { return helper(); }
+            """;
+        const string b = """
+            static int helper(void) { return 20; }
+            int from_b(void) { return helper(); }
+            """;
+        const string main = """
+            extern int from_a(void);
+            extern int from_b(void);
+            int main(void) { return from_a() + from_b(); } /* 10 + 20 = 30 */
+            """;
+        Assert.That(EmitTestHost.RunMultiple(a, b, main), Is.EqualTo(30));
+    }
+
+    [Test]
+    public void SameNamedStaticGlobals_StayIsolatedPerFile()
+    {
+        // Each file has its own static `count`; bumping one must not disturb the other.
+        const string a = """
+            static int count = 1;
+            int bump_a(void) { count = count + 5; return count; }
+            """;
+        const string b = """
+            static int count = 100;
+            int bump_b(void) { count = count + 7; return count; }
+            """;
+        const string main = """
+            extern int bump_a(void);
+            extern int bump_b(void);
+            int main(void) { bump_a(); bump_b(); return bump_a() + bump_b(); } /* 11 + 114 = 125 */
+            """;
+        Assert.That(EmitTestHost.RunMultiple(a, b, main), Is.EqualTo(125));
+    }
+
+    [Test]
+    public void StaticAndExternalSameName_CoexistAcrossFiles()
+    {
+        // File a has a file-local static `value`; file b exposes an external `value` the main uses.
+        const string a = """
+            static int value = 7;
+            int local_value(void) { return value; }
+            """;
+        const string b = "int value = 99;";
+        const string main = """
+            extern int local_value(void);
+            extern int value;
+            int main(void) { return local_value() + value; } /* 7 + 99 = 106 */
+            """;
+        Assert.That(EmitTestHost.RunMultiple(a, b, main), Is.EqualTo(106));
+    }
+
+    [Test]
     public void IncompatibleStructRedefinition_IsAnError()
     {
         const string a = "struct S { int x; };\nint main(void) { return 0; }";
