@@ -1,0 +1,38 @@
+namespace AnsiCCore.Runtime.Library;
+
+/// <summary>
+/// &lt;math.h&gt; shims. These are pure (no <c>CMemory</c> parameter) and map directly to
+/// <see cref="System.Math"/>. The constants <c>M_PI</c>/<c>M_E</c> are provided as macros by the
+/// stub math.h.
+/// </summary>
+public static class CMath
+{
+    [CExport("sin")] public static double Sin(double x) => Math.Sin(x);
+    [CExport("cos")] public static double Cos(double x) => Math.Cos(x);
+    [CExport("tan")] public static double Tan(double x) => Math.Tan(x);
+    [CExport("asin")] public static double Asin(double x) => Math.Asin(x);
+    [CExport("acos")] public static double Acos(double x) => Math.Acos(x);
+    [CExport("atan")] public static double Atan(double x) => Math.Atan(x);
+    [CExport("atan2")] public static double Atan2(double y, double x) => Math.Atan2(y, x);
+
+    [CExport("sinh")] public static double Sinh(double x) => Math.Sinh(x);
+    [CExport("cosh")] public static double Cosh(double x) => Math.Cosh(x);
+    [CExport("tanh")] public static double Tanh(double x) => Math.Tanh(x);
+
+    [CExport("exp")] public static double Exp(double x) => Math.Exp(x);
+    [CExport("log")] public static double Log(double x) => Math.Log(x);
+    [CExport("log10")] public static double Log10(double x) => Math.Log10(x);
+    [CExport("pow")] public static double Pow(double x, double y) => Math.Pow(x, y);
+    [CExport("sqrt")] public static double Sqrt(double x) => Math.Sqrt(x);
+    [CExport("cbrt")] public static double Cbrt(double x) => Math.Cbrt(x);
+
+    [CExport("fabs")] public static double Fabs(double x) => Math.Abs(x);
+    [CExport("fmod")] public static double Fmod(double x, double y) => x % y; // C# % on doubles matches C fmod
+    [CExport("floor")] public static double Floor(double x) => Math.Floor(x);
+    [CExport("ceil")] public static double Ceil(double x) => Math.Ceiling(x);
+    [CExport("round")] public static double Round(double x) => Math.Round(x, MidpointRounding.AwayFromZero);
+    [CExport("trunc")] public static double Trunc(double x) => Math.Truncate(x);
+
+    [CExport("hypot")] public static double Hypot(double x, double y) => Math.Sqrt(x * x + y * y);
+    [CExport("ldexp")] public static double Ldexp(double x, int exp) => Math.ScaleB(x, exp);
+}
