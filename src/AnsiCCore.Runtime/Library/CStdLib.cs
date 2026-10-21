@@ -323,9 +323,9 @@ public static class CStdLib
     }
 
     /// <summary>
-    /// The shared <c>printf</c>-family formatter: supports <c>%d %i %u %x %c %s %f %%</c> with the
-    /// <c>- + space 0</c> flags, field width, and precision (and tolerated length modifiers).
-    /// Arguments arrive boxed in declaration order.
+    /// The shared <c>printf</c>-family formatter: supports <c>%d %i %u %o %x %X %p %c %s %f %e %E %g
+    /// %G %%</c> with the <c>- + space 0</c> flags, field width, and precision (and tolerated length
+    /// modifiers). Arguments arrive boxed in declaration order.
     /// </summary>
     private static string Format(CMemory mem, CPtr format, object[] args)
     {
@@ -384,14 +384,17 @@ public static class CStdLib
                 case 'd': case 'i': text = FormatSigned(Convert.ToInt64(Next(), inv), plus, space, precision); break;
                 case 'u': text = Pad0(Convert.ToUInt64(Next(), inv).ToString(inv), precision); break;
                 case 'x': text = Pad0(Convert.ToUInt64(Next(), inv).ToString("x", inv), precision); break;
+                case 'X': text = Pad0(Convert.ToUInt64(Next(), inv).ToString("X", inv), precision); break;
                 case 'o': text = Pad0(ToOctal(Convert.ToUInt64(Next(), inv)), precision); break;
                 case 'p': text = "0x" + ((CPtr)Next()).Address.ToString("x", inv); break;
                 case 'f': case 'F': text = FormatFloat(Convert.ToDouble(Next(), inv), precision < 0 ? 6 : precision, plus, space); break;
+                case 'e': case 'E': text = FormatScientific(Convert.ToDouble(Next(), inv), precision < 0 ? 6 : precision, conv == 'E', plus, space); break;
+                case 'g': case 'G': text = FormatGeneral(Convert.ToDouble(Next(), inv), precision < 0 ? 6 : precision, conv == 'G', plus, space); break;
                 case 'c': text = ((char)(byte)Convert.ToInt32(Next(), inv)).ToString(); break;
                 case 's': { string s = ReadCString(mem, (CPtr)Next()); text = precision >= 0 && precision < s.Length ? s[..precision] : s; break; }
                 default: sb.Append('%').Append(conv); continue;
             }
-            sb.Append(PadField(text, width, left, zero && conv is 'd' or 'i' or 'u' or 'x' or 'o' or 'f' or 'F'));
+            sb.Append(PadField(text, width, left, zero && conv is 'd' or 'i' or 'u' or 'x' or 'X' or 'o' or 'f' or 'F' or 'e' or 'E' or 'g' or 'G'));
         }
         return sb.ToString();
     }
@@ -407,6 +410,52 @@ public static class CStdLib
     {
         string body = Math.Abs(v).ToString("F" + precision, CultureInfo.InvariantCulture);
         return (v < 0 ? "-" : plus ? "+" : space ? " " : "") + body;
+    }
+
+    /// <summary>C <c>%e</c>/<c>%E</c>: mantissa with <paramref name="precision"/> fraction digits and a
+    /// sign + at-least-two-digit exponent (C89 §7.9.6.1), vs .NET's three-digit exponent.</summary>
+    private static string FormatScientific(double v, int precision, bool upper, bool plus, bool space)
+    {
+        string body = NormalizeExponent(Math.Abs(v).ToString("e" + precision, CultureInfo.InvariantCulture), upper);
+        return (v < 0 ? "-" : plus ? "+" : space ? " " : "") + body;
+    }
+
+    /// <summary>C <c>%g</c>/<c>%G</c>: pick <c>%e</c> or <c>%f</c> by exponent and strip trailing zeros
+    /// (no <c>#</c> flag), with precision counting significant digits (0 treated as 1).</summary>
+    private static string FormatGeneral(double v, int precision, bool upper, bool plus, bool space)
+    {
+        int p = precision == 0 ? 1 : precision;
+        double av = Math.Abs(v);
+        string sci = av.ToString("e" + (p - 1), CultureInfo.InvariantCulture); // p significant digits
+        int eIdx = sci.IndexOf('e');
+        int exp = int.Parse(sci[(eIdx + 1)..], CultureInfo.InvariantCulture);
+        string sign = v < 0 ? "-" : plus ? "+" : space ? " " : "";
+
+        string body = exp >= -4 && exp < p
+            ? StripTrailingZeros(av.ToString("F" + Math.Max(0, p - 1 - exp), CultureInfo.InvariantCulture))
+            : StripTrailingZeros(sci[..eIdx]) + (upper ? 'E' : 'e') + ExponentTail(exp);
+        return sign + body;
+    }
+
+    /// <summary>Rewrites a .NET scientific string's exponent to C's sign + minimum-two-digit form.</summary>
+    private static string NormalizeExponent(string s, bool upper)
+    {
+        int e = s.IndexOf('e');
+        if (e < 0) return s;
+        return s[..e] + (upper ? 'E' : 'e') + ExponentTail(int.Parse(s[(e + 1)..], CultureInfo.InvariantCulture));
+    }
+
+    private static string ExponentTail(int exp)
+    {
+        string digits = Math.Abs(exp).ToString(CultureInfo.InvariantCulture);
+        return (exp < 0 ? "-" : "+") + (digits.Length < 2 ? digits.PadLeft(2, '0') : digits);
+    }
+
+    private static string StripTrailingZeros(string s)
+    {
+        if (s.IndexOf('.') < 0) return s;
+        s = s.TrimEnd('0');
+        return s.EndsWith('.') ? s[..^1] : s;
     }
 
     private static string Pad0(string digits, int precision) => precision >= 0 ? digits.PadLeft(precision, '0') : digits;

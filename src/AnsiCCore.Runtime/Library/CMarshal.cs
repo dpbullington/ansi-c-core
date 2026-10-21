@@ -33,4 +33,19 @@ public static class CMarshal
         for (int i = 0; i < bytes.Length; i++) mem.WriteUInt8(ptr + i, bytes[i]);
         return ptr;
     }
+
+    /// <summary>
+    /// Builds a C <c>argv</c> vector for <c>main(int argc, char **argv)</c>: each managed string is
+    /// copied into the address space, their pointers are stored in a contiguous array, and a
+    /// terminating null pointer is appended (C89 §5.1.2.2.1 guarantees <c>argv[argc] == NULL</c>).
+    /// Returns the vector base; <paramref name="args"/> already includes <c>argv[0]</c>.
+    /// </summary>
+    public static CPtr BuildArgv(CMemory mem, string[] args)
+    {
+        var vector = mem.Allocate((long)(args.Length + 1) * 8, RegionKind.Static);
+        for (int i = 0; i < args.Length; i++)
+            mem.WritePointer(vector + (long)i * 8, FromManaged(mem, args[i]));
+        mem.WritePointer(vector + (long)args.Length * 8, CPtr.Null);
+        return vector;
+    }
 }

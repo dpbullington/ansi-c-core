@@ -259,27 +259,60 @@ public sealed partial class CSharpEmitter
         if (main is null) return;
 
         var ft = (FunctionType)_model.SymbolsByNode[main].Type.Type;
-        if (ft.Parameters.Count != 0)
-            throw new EmitException("only 'int main(void)' is supported in this slice");
+        bool returnsVoid = ft.ReturnType.Type is VoidType;
 
-        Line("private static int Main()");
-        OpenBrace();
-        if (ft.ReturnType.Type is VoidType)
+        if (ft.Parameters.Count == 0)
         {
-            Line("main();");
+            Line("private static int Main()");
+            OpenBrace();
+            if (returnsVoid)
+            {
+                Line("main();");
+                Line("return 0;");
+            }
+            else
+            {
+                Line("return unchecked((int)main());");
+            }
+            CloseBrace();
+            return;
+        }
+
+        // int main(int argc, char **argv): marshal the CLI arguments into the memory model, with a
+        // synthetic argv[0] program name prepended (C# args omit it), so argc == args.Length + 1.
+        if (!IsArgcArgv(ft))
+            throw new EmitException("only 'int main(void)' and 'int main(int, char **)' are supported");
+
+        Line("private static int Main(string[] args)");
+        OpenBrace();
+        Line("string[] __argv = new string[args.Length + 1];");
+        Line("__argv[0] = \"program\";");
+        Line("System.Array.Copy(args, 0, __argv, 1, args.Length);");
+        Line("CPtr __argvPtr = AnsiCCore.Runtime.Library.CMarshal.BuildArgv(__mem, __argv);");
+        string call = $"main(__argv.Length, __argvPtr)";
+        if (returnsVoid)
+        {
+            Line($"{call};");
             Line("return 0;");
         }
         else
         {
-            Line("return unchecked((int)main());");
+            Line($"return unchecked((int){call});");
         }
         CloseBrace();
     }
+
+    /// <summary>True for the <c>main(int argc, char **argv)</c> signature (argv already adjusted to a pointer).</summary>
+    private static bool IsArgcArgv(FunctionType ft)
+        => ft.Parameters.Count == 2
+            && ft.Parameters[0].Type.Type is IntegerType or EnumType
+            && ft.Parameters[1].Type.Type is PointerType;
 
     private void EmitRuntimeHelpers()
     {
         Line();
         Line("private static T Comma<T>(object? left, T right) => right;");
+        Line("private static T __Post<T>(T old, object? write) => old; // postfix ++/--: args evaluate left-to-right, so old is read before the store");
         Line("private static CPtr __PostAddPtr(ref CPtr p, long d) { CPtr old = p; p = p + d; return old; }");
         Line("private static CPtr __ByValue(CPtr src, long size) { CPtr d = __mem.Allocate(size, RegionKind.Automatic); __mem.Copy(d, src, size); return d; }");
     }

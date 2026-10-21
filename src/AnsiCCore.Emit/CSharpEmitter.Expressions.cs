@@ -318,11 +318,12 @@ public sealed partial class CSharpEmitter
     /// <summary>The right-hand side of a compound assignment as a plain binary expression (scaling pointer steps).</summary>
     private string CompoundRhs(string current, CType targetType, TokenKind compoundOp, Expression value)
     {
-        char op = compoundOp switch
+        string op = compoundOp switch
         {
-            TokenKind.PlusEqual => '+', TokenKind.MinusEqual => '-', TokenKind.StarEqual => '*',
-            TokenKind.SlashEqual => '/', TokenKind.PercentEqual => '%', TokenKind.AmpEqual => '&',
-            TokenKind.PipeEqual => '|', TokenKind.CaretEqual => '^',
+            TokenKind.PlusEqual => "+", TokenKind.MinusEqual => "-", TokenKind.StarEqual => "*",
+            TokenKind.SlashEqual => "/", TokenKind.PercentEqual => "%", TokenKind.AmpEqual => "&",
+            TokenKind.PipeEqual => "|", TokenKind.CaretEqual => "^",
+            TokenKind.LessLessEqual => "<<", TokenKind.GreaterGreaterEqual => ">>",
             _ => throw new EmitException($"compound operator '{TokenSpelling.Spell(compoundOp)}' is not supported yet"),
         };
         if (targetType is PointerType p)
@@ -340,23 +341,23 @@ public sealed partial class CSharpEmitter
 
         if (AsBitField(operand) is { } bf)
         {
-            if (isPostfix)
-                throw new EmitException("postfix ++/-- on a bit-field in a value context is not supported yet");
+            string ft = TypeMapper.Map(bf.FieldType);
             string read = $"__mem.ReadBitField({bf.UnitAddr}, {bf.UnitSize}, {bf.BitOffset}, {bf.BitWidth}, {Bool(bf.Signed)})";
-            string next = $"unchecked(({TypeMapper.Map(bf.FieldType)})({read} {sign} {delta}))";
-            return $"unchecked(({TypeMapper.Map(bf.FieldType)})__mem.StoreBitField({bf.UnitAddr}, {bf.UnitSize}, {bf.BitOffset}, {bf.BitWidth}, {Bool(bf.Signed)}, {next}))";
+            string next = $"unchecked(({ft})({read} {sign} {delta}))";
+            string store = $"unchecked(({ft})__mem.StoreBitField({bf.UnitAddr}, {bf.UnitSize}, {bf.BitOffset}, {bf.BitWidth}, {Bool(bf.Signed)}, {next}))";
+            // Postfix yields the old value: __Post evaluates the old read first, then the store.
+            return isPostfix ? $"__Post(unchecked(({ft})({read})), {store})" : store;
         }
 
         if (IsMemoryLvalue(operand, _model, _plan))
         {
             string addr = EmitAddress(operand);
             string suffix = MemoryAccess.Suffix(type);
-            if (isPostfix)
-                throw new EmitException("postfix ++/-- on a memory object in a value context is not supported yet");
             string updated = type is PointerType
                 ? $"(__mem.Read{suffix}({addr}) {sign} {delta})"
                 : $"unchecked(({TypeMapper.Map(type)})(__mem.Read{suffix}({addr}) {sign} {delta}))";
-            return $"__mem.Store{suffix}({addr}, {updated})";
+            string store = $"__mem.Store{suffix}({addr}, {updated})";
+            return isPostfix ? $"__Post(__mem.Read{suffix}({addr}), {store})" : store;
         }
 
         string name = EmitValue(operand);

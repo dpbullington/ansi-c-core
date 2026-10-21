@@ -105,8 +105,11 @@ internal static class EmitTestHost
         return result.EmittedCSharp ?? throw new AssertionException("driver produced no C#");
     }
 
+    /// <summary>Transpiles and runs a program with command-line arguments (for main(argc, argv)).</summary>
+    public static int RunWithArgs(string cSource, params string[] args) => RunCSharp(Transpile(cSource), args);
+
     /// <summary>Compiles already-emitted C# and runs its entry point, returning the exit code.</summary>
-    public static int RunCSharp(string csharp)
+    public static int RunCSharp(string csharp, string[]? args = null)
     {
         var tree = CSharpSyntaxTree.ParseText(csharp);
         var compilation = CSharpCompilation.Create(
@@ -126,7 +129,7 @@ internal static class EmitTestHost
         stream.Position = 0;
         var assembly = Assembly.Load(stream.ToArray());
         var entry = assembly.EntryPoint ?? throw new AssertionException("emitted assembly has no entry point");
-        object? value = entry.Invoke(null, entry.GetParameters().Length == 0 ? null : [Array.Empty<string>()]);
+        object? value = entry.Invoke(null, entry.GetParameters().Length == 0 ? null : [args ?? Array.Empty<string>()]);
         return value is int code ? code : 0;
     }
 

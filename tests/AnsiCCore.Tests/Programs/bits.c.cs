@@ -27,6 +27,7 @@ internal static class CProgram
 
 
     private static T Comma<T>(object? left, T right) => right;
+    private static T __Post<T>(T old, object? write) => old; // postfix ++/--: args evaluate left-to-right, so old is read before the store
     private static CPtr __PostAddPtr(ref CPtr p, long d) { CPtr old = p; p = p + d; return old; }
     private static CPtr __ByValue(CPtr src, long size) { CPtr d = __mem.Allocate(size, RegionKind.Automatic); __mem.Copy(d, src, size); return d; }
     private static CPtr __str0;
