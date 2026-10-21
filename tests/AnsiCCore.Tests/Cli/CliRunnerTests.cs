@@ -121,7 +121,7 @@ public class CliRunnerTests
         {
             var (code, _, _) = Run("-o", outDir, path);
             Assert.That(code, Is.EqualTo(0));
-            string expected = Path.Combine(outDir, Path.GetFileNameWithoutExtension(path) + ".g.cs");
+            string expected = Path.Combine(outDir, "program.g.cs");
             Assert.That(File.Exists(expected), Is.True);
             Assert.That(File.ReadAllText(expected), Does.Contain("class CProgram"));
         }

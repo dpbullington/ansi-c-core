@@ -1,5 +1,6 @@
 using System.Reflection;
 using AnsiCCore.Emit;
+using AnsiCCore.Frontend.Ast;
 using AnsiCCore.Frontend.Diagnostics;
 using AnsiCCore.Frontend.Lexing;
 using AnsiCCore.Frontend.Parsing;
@@ -38,27 +39,65 @@ public sealed class TranspilerDriver
         return _registry = ExportRegistry.FromLinkedAssemblies(assemblies);
     }
 
-    /// <summary>Reads and processes each input path from disk.</summary>
+    /// <summary>
+    /// Reads and processes each input path. All files are compiled as one program: each is
+    /// preprocessed and parsed independently, their ASTs are concatenated, and the combined unit
+    /// is analyzed and emitted once — so external functions and globals link across files.
+    /// (Identical type definitions from a shared header are deduplicated by Semantics.)
+    /// </summary>
     public DriverResult Run(IEnumerable<string> inputPaths)
     {
         var resolver = new FileSystemIncludeResolver(_options.IncludeDirectories, _options.IncludeDirectories);
+        var ppOptions = new PreprocessorOptions
+        {
+            PredefinedMacros = _options.PredefinedMacros,
+            LexerOptions = new LexerOptions { AllowLineComments = _options.AllowLineComments },
+        };
+
         var units = new List<TranslationUnitResult>();
+        var items = new List<Node>();
+        SourceLocation start = default;
+        bool haveStart = false;
 
         foreach (var path in inputPaths)
         {
+            var bag = new DiagnosticBag(); // per-file: lexer/preprocessor/parser messages
             string? source = TryReadFile(path, out var readError);
             if (source == null)
             {
-                var bag = new DiagnosticBag();
                 bag.Error(new SourceLocation(path, 0, 0, 0), readError ?? "could not read file");
                 units.Add(new TranslationUnitResult(path, [], null, null, null, bag.ToList()));
                 continue;
             }
 
-            units.Add(ProcessSource(source, path, resolver));
+            var tokens = new Preprocessor(resolver, bag, ppOptions).Preprocess(source, path);
+            var ast = new Parser(tokens, bag).ParseTranslationUnit();
+            if (!haveStart) { start = ast.Location; haveStart = true; }
+            items.AddRange(ast.Items);
+            units.Add(new TranslationUnitResult(path, tokens, ast, null, null, bag.ToList()));
         }
 
-        return new DriverResult(units);
+        // Analyze and emit the whole program as one unit.
+        var program = new TranslationUnit(start, items);
+        var programDiagnostics = new DiagnosticBag();
+        var model = SemanticAnalyzer.Analyze(program, programDiagnostics);
+
+        string? emitted = null;
+        if (_options.EmitCSharp)
+        {
+            var registry = GetExportRegistry();
+            foreach (var error in _linkErrors)
+                programDiagnostics.Error(start, error);
+
+            bool anyFileError = units.Any(u => u.Diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error));
+            if (!programDiagnostics.HasErrors && !anyFileError)
+            {
+                try { emitted = CSharpEmitter.Emit(program, model, registry); }
+                catch (EmitException ex) { programDiagnostics.Error(start, $"emit: {ex.Message}"); }
+            }
+        }
+
+        return new DriverResult(units, model, emitted, programDiagnostics.ToList());
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using System.Reflection;
 using AnsiCCore.Driver;
 using AnsiCCore.Emit;
+using AnsiCCore.Frontend.Ast;
 using AnsiCCore.Frontend.Diagnostics;
 using AnsiCCore.Frontend.Lexing;
 using AnsiCCore.Frontend.Parsing;
@@ -56,6 +57,34 @@ internal static class EmitTestHost
     }
 
     public static int RunLinking(string cSource, params Assembly[] linked) => RunCSharp(TranspileLinking(cSource, linked));
+
+    /// <summary>
+    /// Transpiles several C source files as one program: each is parsed separately, their ASTs are
+    /// concatenated, and the combined unit is analyzed and emitted once (so external symbols link
+    /// across files). Mirrors the driver's multi-file path without the preprocessor.
+    /// </summary>
+    public static string TranspileMultiple(params string[] sources)
+    {
+        var bag = new DiagnosticBag();
+        var items = new List<Node>();
+        SourceLocation start = default;
+        for (int i = 0; i < sources.Length; i++)
+        {
+            var tokens = new Lexer(sources[i], $"f{i}.c").Tokenize();
+            var ast = new Parser(tokens, bag).ParseTranslationUnit();
+            if (i == 0) start = ast.Location;
+            items.AddRange(ast.Items);
+        }
+
+        var program = new TranslationUnit(start, items);
+        var model = SemanticAnalyzer.Analyze(program, bag);
+
+        var errors = bag.Where(d => d.Severity == CSeverity.Error).ToList();
+        Assert.That(errors, Is.Empty, () => "C diagnostics: " + string.Join("; ", errors));
+        return CSharpEmitter.Emit(program, model);
+    }
+
+    public static int RunMultiple(params string[] sources) => RunCSharp(TranspileMultiple(sources));
 
     public static (int Exit, string Output) RunLinkingWithOutput(string cSource, params Assembly[] linked)
         => RunCSharpWithOutput(TranspileLinking(cSource, linked));

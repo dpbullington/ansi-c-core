@@ -140,17 +140,18 @@ public sealed partial class SemanticAnalyzer
         }
 
         // Definition (with body). Reuse a prior forward declaration in this scope if present.
+        var priorComplete = s.Tag is not null && _current.LookupTagLocal(s.Tag) is RecordType { IsComplete: true } pc && pc.IsUnion == s.IsUnion ? pc : null;
+
         RecordType record;
         if (s.Tag is not null && _current.LookupTagLocal(s.Tag) is RecordType local && !local.IsComplete && local.IsUnion == s.IsUnion)
             record = local;
+        else if (priorComplete is not null)
+            record = priorComplete; // an identical re-definition (e.g. from a shared header) is idempotent
         else
         {
             record = new RecordType(s.IsUnion, s.Tag);
             if (s.Tag is not null) _current.DeclareTag(s.Tag, record); // declare before members for self-reference
         }
-
-        if (record.IsComplete)
-            Error(s.Location, $"redefinition of '{record.Display}'");
 
         var fields = new List<Field>();
         foreach (var member in s.Members)
@@ -171,9 +172,27 @@ public sealed partial class SemanticAnalyzer
             }
         }
 
+        if (priorComplete is not null)
+        {
+            if (!SameFields(priorComplete.Fields, fields))
+                Error(s.Location, $"redefinition of '{record.Display}'");
+            return priorComplete; // keep the existing (already-laid-out) type
+        }
+
         var (size, align) = ComputeLayout(fields, s.IsUnion);
         record.Complete(fields, size, align);
         return record;
+    }
+
+    /// <summary>True when two member lists match (name, type, bit-width) — an identical redefinition.</summary>
+    private static bool SameFields(IReadOnlyList<Field> a, IReadOnlyList<Field> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+            if (a[i].Name != b[i].Name || a[i].BitWidth != b[i].BitWidth
+                || !TypeOperations.AreCompatibleQualified(a[i].Type, b[i].Type))
+                return false;
+        return true;
     }
 
     private CType ResolveEnum(EnumSpecifier e)
@@ -187,10 +206,8 @@ public sealed partial class SemanticAnalyzer
             return forward;
         }
 
-        var enumType = new EnumType(e.Tag);
-        if (e.Tag is not null) _current.DeclareTag(e.Tag, enumType);
-
-        var constants = new List<(string, long)>();
+        // Compute the enumerator values first so an identical re-definition can be detected.
+        var constants = new List<(string Name, long Value)>();
         long next = 0;
         foreach (var enumerator in e.Enumerators)
         {
@@ -200,16 +217,23 @@ public sealed partial class SemanticAnalyzer
                 if (EvalConst(enumerator.Value) is { } v) value = v;
                 else Error(enumerator.Location, $"enumerator value for '{enumerator.Name}' is not an integer constant");
             }
-
-            var constant = new Symbol(enumerator.Name, SymbolKind.EnumConstant, CTypes.Int, StorageClass.None, enumerator.Location)
-            {
-                EnumValue = value,
-            };
-            DeclareOrdinaryChecked(constant, _current.IsFileScope);
             constants.Add((enumerator.Name, value));
             next = value + 1;
         }
 
+        // An identical re-definition (e.g. from a shared header) is idempotent: reuse it and do
+        // not re-declare the constants.
+        if (e.Tag is not null && _current.LookupTagLocal(e.Tag) is EnumType { IsComplete: true } prior)
+        {
+            if (!prior.Constants.SequenceEqual(constants))
+                Error(e.Location, $"redefinition of 'enum {e.Tag}'");
+            return prior;
+        }
+
+        var enumType = new EnumType(e.Tag);
+        if (e.Tag is not null) _current.DeclareTag(e.Tag, enumType);
+        foreach (var (name, value) in constants)
+            DeclareOrdinaryChecked(new Symbol(name, SymbolKind.EnumConstant, CTypes.Int, StorageClass.None, e.Location) { EnumValue = value }, _current.IsFileScope);
         enumType.Complete(constants);
         return enumType;
     }

@@ -95,7 +95,13 @@ public sealed partial class CSharpEmitter
 
     private List<GlobalInfo> PlanGlobals(TranslationUnit unit)
     {
+        // A global may appear more than once across translation units (a definition plus extern
+        // declarations). Emit one field per name, keeping the initializer from the definition and
+        // memory-backing it if any occurrence is address-taken.
         var globals = new List<GlobalInfo>();
+        var byName = new Dictionary<string, int>(StringComparer.Ordinal);
+        var symbolsByName = new Dictionary<string, List<Symbol>>(StringComparer.Ordinal);
+
         foreach (var d in unit.Items.OfType<Declaration>())
         {
             if (d.Specifiers.IsTypedef) continue;
@@ -106,10 +112,26 @@ public sealed partial class CSharpEmitter
 
                 bool memory = _plan.IsMemoryBacked(sym);
                 string name = Naming.Safe(sym.Name);
-                globals.Add(new GlobalInfo(sym, name, memory, sym.Type, init.Initializer));
-                if (memory) _globalAddress[sym] = name;
+                (symbolsByName.TryGetValue(name, out var list) ? list : symbolsByName[name] = []).Add(sym);
+
+                if (byName.TryGetValue(name, out int idx))
+                {
+                    var cur = globals[idx];
+                    globals[idx] = cur with { MemoryBacked = cur.MemoryBacked || memory, Initializer = cur.Initializer ?? init.Initializer };
+                }
+                else
+                {
+                    byName[name] = globals.Count;
+                    globals.Add(new GlobalInfo(sym, name, memory, sym.Type, init.Initializer));
+                }
             }
         }
+
+        // Point every symbol that names a memory-backed global at its field.
+        foreach (var g in globals.Where(g => g.MemoryBacked))
+            foreach (var sym in symbolsByName[g.Name])
+                _globalAddress[sym] = g.Name;
+
         return globals;
     }
 

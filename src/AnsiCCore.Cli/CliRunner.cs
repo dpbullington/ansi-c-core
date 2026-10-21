@@ -35,43 +35,38 @@ public static class CliRunner
         var driver = new TranspilerDriver(options);
         var result = driver.Run(inputs);
 
+        foreach (var diag in result.AllDiagnostics)
+            errWriter.WriteLine(diag.ToString());
+
         foreach (var unit in result.Units)
         {
-            foreach (var diag in unit.Diagnostics)
-                errWriter.WriteLine(diag.ToString());
-
-            if (dumps.Tokens)
-                DumpTokens(outWriter, unit);
-
+            if (dumps.Tokens) DumpTokens(outWriter, unit);
             if (dumps.Ast && unit.Ast != null)
             {
                 outWriter.WriteLine($"// AST for {unit.Path}");
                 outWriter.Write(AstPrinter.Print(unit.Ast));
             }
-
-            if (dumps.Symbols && unit.Model != null)
-                DumpSymbols(outWriter, unit);
-
-            if (dumps.CSharp && unit.EmittedCSharp != null)
-            {
-                outWriter.WriteLine($"// C# for {unit.Path}");
-                outWriter.Write(unit.EmittedCSharp);
-            }
-
-            if (options.OutputDirectory != null && unit.EmittedCSharp != null)
-                WriteOutput(outWriter, errWriter, options.OutputDirectory, unit);
-
-            if (!dumps.Any)
-            {
-                int items = unit.Ast?.Items.Count ?? 0;
-                int errors = unit.Diagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
-                outWriter.WriteLine($"{unit.Path}: {items} top-level item(s), {errors} error(s)");
-            }
         }
 
-        // Emit a turn-key project referencing the runtime and any linked libraries.
-        if (options.OutputDirectory != null && result.Units.Any(u => u.EmittedCSharp != null))
+        if (dumps.Symbols && result.Model != null)
+            DumpSymbols(outWriter, result.Model);
+
+        // The whole program is emitted as one C# compilation unit.
+        if (dumps.CSharp && result.EmittedProgram != null)
+            outWriter.Write(result.EmittedProgram);
+
+        if (options.OutputDirectory != null && result.EmittedProgram != null)
+        {
+            WriteOutput(outWriter, errWriter, options.OutputDirectory, result.EmittedProgram);
             WriteProjectFile(outWriter, errWriter, options);
+        }
+
+        if (!dumps.Any)
+        {
+            int items = result.Units.Sum(u => u.Ast?.Items.Count ?? 0);
+            int errors = result.AllDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
+            outWriter.WriteLine($"{string.Join(", ", result.Units.Select(u => u.Path))}: {items} top-level item(s), {errors} error(s)");
+        }
 
         return result.Success ? ExitOk : ExitError;
     }
@@ -86,18 +81,18 @@ public static class CliRunner
         }
     }
 
-    private static void WriteOutput(TextWriter outWriter, TextWriter errWriter, string outputDirectory, TranslationUnitResult unit)
+    private static void WriteOutput(TextWriter outWriter, TextWriter errWriter, string outputDirectory, string csharp)
     {
         try
         {
             Directory.CreateDirectory(outputDirectory);
-            string file = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(unit.Path) + ".g.cs");
-            File.WriteAllText(file, unit.EmittedCSharp!);
+            string file = Path.Combine(outputDirectory, "program.g.cs");
+            File.WriteAllText(file, csharp);
             outWriter.WriteLine($"ansicc: wrote {file}");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            errWriter.WriteLine($"ansicc: could not write output for {unit.Path}: {ex.Message}");
+            errWriter.WriteLine($"ansicc: could not write output: {ex.Message}");
         }
     }
 
@@ -140,10 +135,10 @@ public static class CliRunner
         }
     }
 
-    private static void DumpSymbols(TextWriter outWriter, TranslationUnitResult unit)
+    private static void DumpSymbols(TextWriter outWriter, AnsiCCore.Semantics.Symbols.SemanticModel model)
     {
-        var scope = unit.Model!.GlobalScope;
-        outWriter.WriteLine($"// global symbols for {unit.Path}");
+        var scope = model.GlobalScope;
+        outWriter.WriteLine("// global symbols");
         foreach (var (name, sym) in scope.OrdinarySymbols.OrderBy(kv => kv.Key, StringComparer.Ordinal))
             outWriter.WriteLine($"  {sym.Kind,-12} {name} : {sym.Type}");
         foreach (var (tag, type) in scope.Tags.OrderBy(kv => kv.Key, StringComparer.Ordinal))
