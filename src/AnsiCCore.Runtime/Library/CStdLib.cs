@@ -58,19 +58,24 @@ public static class CStdLib
     [CExport("strtol")]
     public static long StrtoL(CMemory mem, CPtr s, CPtr endptr, int radix)
     {
-        ulong magnitude = ParseInteger(mem, s, radix, out bool negative, out long consumed, out bool any);
+        ulong magnitude = ParseInteger(mem, s, radix, out bool negative, out long consumed, out bool any, out bool overflow);
         if (endptr != CPtr.Null) mem.WritePointer(endptr, s + (any ? consumed : 0));
         if (negative)
-            return magnitude >= 0x8000000000000000UL ? long.MinValue : -(long)magnitude;
-        return magnitude > long.MaxValue ? long.MaxValue : (long)magnitude;
+        {
+            if (overflow || magnitude > 0x8000000000000000UL) { SetErrno(mem, ERANGE); return long.MinValue; }
+            return unchecked(-(long)magnitude);
+        }
+        if (overflow || magnitude > long.MaxValue) { SetErrno(mem, ERANGE); return long.MaxValue; }
+        return (long)magnitude;
     }
 
     /// <summary><c>strtoul</c>: like <see cref="StrtoL"/> but unsigned (a leading '-' negates modulo 2^64).</summary>
     [CExport("strtoul")]
     public static ulong StrtoUL(CMemory mem, CPtr s, CPtr endptr, int radix)
     {
-        ulong magnitude = ParseInteger(mem, s, radix, out bool negative, out long consumed, out bool any);
+        ulong magnitude = ParseInteger(mem, s, radix, out bool negative, out long consumed, out bool any, out bool overflow);
         if (endptr != CPtr.Null) mem.WritePointer(endptr, s + (any ? consumed : 0));
+        if (overflow) { SetErrno(mem, ERANGE); return ulong.MaxValue; }
         return negative ? unchecked(0UL - magnitude) : magnitude;
     }
 
@@ -103,11 +108,29 @@ public static class CStdLib
 
         if (!anyDigits) { if (endptr != CPtr.Null) mem.WritePointer(endptr, s); return 0.0; }
         if (endptr != CPtr.Null) mem.WritePointer(endptr, s + i);
-        return double.TryParse(sb.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double value) ? value : 0.0;
+        double value = double.TryParse(sb.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : 0.0;
+        if (double.IsInfinity(value)) SetErrno(mem, ERANGE); // out-of-range magnitude
+        return value;
     }
 
-    /// <summary>Shared integer scanner for strtol/strtoul: returns the magnitude and parse metadata.</summary>
-    private static ulong ParseInteger(CMemory mem, CPtr s, int radix, out bool negative, out long consumed, out bool any)
+    // --- <errno.h> --------------------------------------------------------
+
+    public const int EDOM = 33;   // argument out of a function's domain
+    public const int ERANGE = 34; // result out of range
+
+    private static readonly ConditionalWeakTable<CMemory, CPtr[]> ErrnoCells = new();
+
+    /// <summary>The address of the program's <c>errno</c> int; the &lt;errno.h&gt; macro dereferences it.</summary>
+    [CExport("__errno_location")]
+    public static CPtr ErrnoLocation(CMemory mem)
+        => ErrnoCells.GetValue(mem, m => new[] { m.Allocate(4, RegionKind.Static) })[0];
+
+    /// <summary>Sets <c>errno</c> for the program sharing <paramref name="mem"/> (used by library shims).</summary>
+    public static void SetErrno(CMemory mem, int value) => mem.WriteInt32(ErrnoLocation(mem), value);
+
+    /// <summary>Shared integer scanner for strtol/strtoul: returns the magnitude and parse metadata
+    /// (<paramref name="overflow"/> is set if accumulation exceeded 64 bits).</summary>
+    private static ulong ParseInteger(CMemory mem, CPtr s, int radix, out bool negative, out long consumed, out bool any, out bool overflow)
     {
         long i = 0;
         while (IsSpace(mem.ReadUInt8(s + i)) != 0) i++;
@@ -129,9 +152,11 @@ public static class CStdLib
 
         ulong value = 0;
         any = false;
+        overflow = false;
         int digit;
         while ((digit = DigitValue(mem.ReadUInt8(s + i))) >= 0 && digit < radix)
         {
+            if (value > (ulong.MaxValue - (ulong)digit) / (ulong)radix) overflow = true;
             value = value * (ulong)radix + (ulong)digit;
             i++; any = true;
         }
@@ -194,6 +219,42 @@ public static class CStdLib
     {
         string? value = Environment.GetEnvironmentVariable(ReadCString(mem, name));
         return value is null ? CPtr.Null : CMarshal.FromManaged(mem, value);
+    }
+
+    /// <summary>
+    /// <c>qsort</c>: sorts <paramref name="nmemb"/> elements of <paramref name="size"/> bytes in
+    /// place. The comparator arrives as a managed delegate (a C function pointer passed by name).
+    /// Indices are sorted over the unmoving original elements so the comparator's pointers stay
+    /// valid throughout, then the permutation is materialized back into the array.
+    /// </summary>
+    [CExport("qsort")]
+    public static void Qsort(CMemory mem, CPtr @base, long nmemb, long size, Func<CPtr, CPtr, int> compar)
+    {
+        if (nmemb <= 1 || size <= 0) return;
+        var index = new int[nmemb];
+        for (int i = 0; i < nmemb; i++) index[i] = i;
+        Array.Sort(index, (x, y) => compar(@base + (long)x * size, @base + (long)y * size));
+
+        var scratch = mem.Allocate(nmemb * size, RegionKind.Automatic);
+        for (int i = 0; i < nmemb; i++) mem.Copy(scratch + (long)i * size, @base + (long)index[i] * size, size);
+        mem.Copy(@base, scratch, nmemb * size);
+    }
+
+    /// <summary><c>bsearch</c>: binary-searches a sorted array, returning a pointer to a matching
+    /// element or null. The comparator is called as <c>compar(key, element)</c>.</summary>
+    [CExport("bsearch")]
+    public static CPtr Bsearch(CMemory mem, CPtr key, CPtr @base, long nmemb, long size, Func<CPtr, CPtr, int> compar)
+    {
+        long lo = 0, hi = nmemb;
+        while (lo < hi)
+        {
+            long mid = (lo + hi) / 2;
+            CPtr elem = @base + mid * size;
+            int c = compar(key, elem);
+            if (c == 0) return elem;
+            if (c < 0) hi = mid; else lo = mid + 1;
+        }
+        return CPtr.Null;
     }
 
     /// <summary><c>system</c>: runs the command through the platform shell, returning its exit code
@@ -637,7 +698,7 @@ public static class CStdLib
     [CExport("printf")]
     public static int Printf(CMemory mem, CPtr format, params object[] args)
     {
-        string output = Format(mem, format, args);
+        string output = Format(mem, format, new BoxedArgs(args));
         Console.Out.Write(output);
         return output.Length;
     }
@@ -645,31 +706,88 @@ public static class CStdLib
     [CExport("fprintf")]
     public static int Fprintf(CMemory mem, CPtr stream, CPtr format, params object[] args)
     {
-        string output = Format(mem, format, args);
+        string output = Format(mem, format, new BoxedArgs(args));
         Handle(mem, stream).WriteText(output);
         return output.Length;
     }
 
     [CExport("sprintf")]
     public static int Sprintf(CMemory mem, CPtr buffer, CPtr format, params object[] args)
+        => WriteCString(mem, buffer, Format(mem, format, new BoxedArgs(args)));
+
+    // The v*printf family takes a va_list (a cursor into the packed vararg region) instead of a
+    // boxed array; the formatter reads each slot as the active conversion requires.
+    [CExport("vprintf")]
+    public static int Vprintf(CMemory mem, CPtr format, CPtr ap)
     {
-        string output = Format(mem, format, args);
+        string output = Format(mem, format, new VaListArgs(mem, ap));
+        Console.Out.Write(output);
+        return output.Length;
+    }
+
+    [CExport("vfprintf")]
+    public static int Vfprintf(CMemory mem, CPtr stream, CPtr format, CPtr ap)
+    {
+        string output = Format(mem, format, new VaListArgs(mem, ap));
+        Handle(mem, stream).WriteText(output);
+        return output.Length;
+    }
+
+    [CExport("vsprintf")]
+    public static int Vsprintf(CMemory mem, CPtr buffer, CPtr format, CPtr ap)
+        => WriteCString(mem, buffer, Format(mem, format, new VaListArgs(mem, ap)));
+
+    private static int WriteCString(CMemory mem, CPtr buffer, string output)
+    {
         for (int i = 0; i < output.Length; i++) mem.WriteUInt8(buffer + i, (byte)output[i]);
         mem.WriteUInt8(buffer + output.Length, 0);
         return output.Length;
     }
 
+    /// <summary>Supplies printf arguments in order, backed either by a boxed array (printf) or a
+    /// va_list region (vprintf). Each accessor reads the value the active conversion needs.</summary>
+    private interface IPrintfArgs
+    {
+        long NextI64();
+        ulong NextU64();
+        double NextF64();
+        CPtr NextPtr();
+        int NextI32();
+    }
+
+    private sealed class BoxedArgs(object[] args) : IPrintfArgs
+    {
+        private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+        private int _i;
+        public long NextI64() => Convert.ToInt64(args[_i++], Inv);
+        public ulong NextU64() => Convert.ToUInt64(args[_i++], Inv);
+        public double NextF64() => Convert.ToDouble(args[_i++], Inv);
+        public CPtr NextPtr() => (CPtr)args[_i++];
+        public int NextI32() => Convert.ToInt32(args[_i++], Inv);
+    }
+
+    private sealed class VaListArgs(CMemory mem, CPtr p) : IPrintfArgs
+    {
+        private CPtr _p = p;
+        private CPtr Take() { var c = _p; _p += CVarArgs.SlotSize; return c; } // one 8-byte slot per arg
+        public long NextI64() => mem.ReadInt64(Take());
+        public ulong NextU64() => mem.ReadUInt64(Take());
+        public double NextF64() => mem.ReadDouble(Take());
+        public CPtr NextPtr() => mem.ReadPointer(Take());
+        public int NextI32() => unchecked((int)mem.ReadInt64(Take()));
+    }
+
     /// <summary>
     /// The shared <c>printf</c>-family formatter: supports <c>%d %i %u %o %x %X %p %c %s %f %e %E %g
     /// %G %%</c> with the <c>- + space 0</c> flags, field width, and precision (and tolerated length
-    /// modifiers). Arguments arrive boxed in declaration order.
+    /// modifiers). Arguments are pulled in declaration order from <paramref name="args"/>.
     /// </summary>
-    private static string Format(CMemory mem, CPtr format, object[] args)
+    private static string Format(CMemory mem, CPtr format, IPrintfArgs args)
     {
         var inv = CultureInfo.InvariantCulture;
         string fmt = ReadCString(mem, format);
         var sb = new StringBuilder();
-        int argIndex = 0, i = 0;
+        int i = 0;
 
         while (i < fmt.Length)
         {
@@ -688,13 +806,11 @@ public static class CStdLib
                 else break;
             }
 
-            object Next() => args[argIndex++];
-
             int width = 0;
             if (i < fmt.Length && fmt[i] == '*') // width taken from an argument
             {
                 i++;
-                width = Convert.ToInt32(Next(), inv);
+                width = args.NextI32();
                 if (width < 0) { left = true; width = -width; }
             }
             else
@@ -706,7 +822,7 @@ public static class CStdLib
             if (i < fmt.Length && fmt[i] == '.')
             {
                 i++;
-                if (i < fmt.Length && fmt[i] == '*') { i++; precision = Math.Max(0, Convert.ToInt32(Next(), inv)); }
+                if (i < fmt.Length && fmt[i] == '*') { i++; precision = Math.Max(0, args.NextI32()); }
                 else { precision = 0; while (i < fmt.Length && char.IsAsciiDigit(fmt[i])) precision = precision * 10 + (fmt[i++] - '0'); }
             }
 
@@ -718,17 +834,17 @@ public static class CStdLib
             switch (conv)
             {
                 case '%': sb.Append('%'); continue;
-                case 'd': case 'i': text = FormatSigned(Convert.ToInt64(Next(), inv), plus, space, precision); break;
-                case 'u': text = Pad0(Convert.ToUInt64(Next(), inv).ToString(inv), precision); break;
-                case 'x': text = Pad0(Convert.ToUInt64(Next(), inv).ToString("x", inv), precision); break;
-                case 'X': text = Pad0(Convert.ToUInt64(Next(), inv).ToString("X", inv), precision); break;
-                case 'o': text = Pad0(ToOctal(Convert.ToUInt64(Next(), inv)), precision); break;
-                case 'p': text = "0x" + ((CPtr)Next()).Address.ToString("x", inv); break;
-                case 'f': case 'F': text = FormatFloat(Convert.ToDouble(Next(), inv), precision < 0 ? 6 : precision, plus, space); break;
-                case 'e': case 'E': text = FormatScientific(Convert.ToDouble(Next(), inv), precision < 0 ? 6 : precision, conv == 'E', plus, space); break;
-                case 'g': case 'G': text = FormatGeneral(Convert.ToDouble(Next(), inv), precision < 0 ? 6 : precision, conv == 'G', plus, space); break;
-                case 'c': text = ((char)(byte)Convert.ToInt32(Next(), inv)).ToString(); break;
-                case 's': { string s = ReadCString(mem, (CPtr)Next()); text = precision >= 0 && precision < s.Length ? s[..precision] : s; break; }
+                case 'd': case 'i': text = FormatSigned(args.NextI64(), plus, space, precision); break;
+                case 'u': text = Pad0(args.NextU64().ToString(inv), precision); break;
+                case 'x': text = Pad0(args.NextU64().ToString("x", inv), precision); break;
+                case 'X': text = Pad0(args.NextU64().ToString("X", inv), precision); break;
+                case 'o': text = Pad0(ToOctal(args.NextU64()), precision); break;
+                case 'p': text = "0x" + args.NextPtr().Address.ToString("x", inv); break;
+                case 'f': case 'F': text = FormatFloat(args.NextF64(), precision < 0 ? 6 : precision, plus, space); break;
+                case 'e': case 'E': text = FormatScientific(args.NextF64(), precision < 0 ? 6 : precision, conv == 'E', plus, space); break;
+                case 'g': case 'G': text = FormatGeneral(args.NextF64(), precision < 0 ? 6 : precision, conv == 'G', plus, space); break;
+                case 'c': text = ((char)(byte)args.NextI64()).ToString(); break;
+                case 's': { string s = ReadCString(mem, args.NextPtr()); text = precision >= 0 && precision < s.Length ? s[..precision] : s; break; }
                 default: sb.Append('%').Append(conv); continue;
             }
             sb.Append(PadField(text, width, left, zero && conv is 'd' or 'i' or 'u' or 'x' or 'X' or 'o' or 'f' or 'F' or 'e' or 'E' or 'g' or 'G'));

@@ -31,8 +31,8 @@ public static class CMath
     [CExport("sin")] public static double Sin(double x) => Math.Sin(x);
     [CExport("cos")] public static double Cos(double x) => Math.Cos(x);
     [CExport("tan")] public static double Tan(double x) => Math.Tan(x);
-    [CExport("asin")] public static double Asin(double x) => Math.Asin(x);
-    [CExport("acos")] public static double Acos(double x) => Math.Acos(x);
+    [CExport("asin")] public static double Asin(CMemory mem, double x) => Check(mem, x, Math.Asin(x));
+    [CExport("acos")] public static double Acos(CMemory mem, double x) => Check(mem, x, Math.Acos(x));
     [CExport("atan")] public static double Atan(double x) => Math.Atan(x);
     [CExport("atan2")] public static double Atan2(double y, double x) => Math.Atan2(y, x);
 
@@ -40,11 +40,20 @@ public static class CMath
     [CExport("cosh")] public static double Cosh(double x) => Math.Cosh(x);
     [CExport("tanh")] public static double Tanh(double x) => Math.Tanh(x);
 
-    [CExport("exp")] public static double Exp(double x) => Math.Exp(x);
-    [CExport("log")] public static double Log(double x) => Math.Log(x);
-    [CExport("log10")] public static double Log10(double x) => Math.Log10(x);
-    [CExport("pow")] public static double Pow(double x, double y) => Math.Pow(x, y);
-    [CExport("sqrt")] public static double Sqrt(double x) => Math.Sqrt(x);
+    [CExport("exp")] public static double Exp(CMemory mem, double x) => Check(mem, x, Math.Exp(x));
+    [CExport("log")] public static double Log(CMemory mem, double x) => Check(mem, x, Math.Log(x));
+    [CExport("log10")] public static double Log10(CMemory mem, double x) => Check(mem, x, Math.Log10(x));
+    [CExport("pow")] public static double Pow(CMemory mem, double x, double y) => Check(mem, x, Math.Pow(x, y));
+    [CExport("sqrt")] public static double Sqrt(CMemory mem, double x) => Check(mem, x, Math.Sqrt(x));
+
+    /// <summary>Maps a math result to C89 errno (§7.5.1): a NaN from non-NaN input is a domain error
+    /// (EDOM); an infinity from finite input is a range error (ERANGE).</summary>
+    private static double Check(CMemory mem, double x, double result)
+    {
+        if (double.IsNaN(result) && !double.IsNaN(x)) CStdLib.SetErrno(mem, CStdLib.EDOM);
+        else if (double.IsInfinity(result) && !double.IsInfinity(x)) CStdLib.SetErrno(mem, CStdLib.ERANGE);
+        return result;
+    }
     [CExport("cbrt")] public static double Cbrt(double x) => Math.Cbrt(x);
 
     [CExport("fabs")] public static double Fabs(double x) => Math.Abs(x);

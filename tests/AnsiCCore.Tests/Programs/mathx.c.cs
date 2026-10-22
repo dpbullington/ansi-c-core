@@ -8,8 +8,8 @@ internal static class CProgram
 
     private static int main()
     {
-        AnsiCCore.Runtime.Library.CStdLib.Printf(__mem, __str0, new object[] { (object)(AnsiCCore.Runtime.Library.CMath.Sqrt(2.0)) });
-        AnsiCCore.Runtime.Library.CStdLib.Printf(__mem, __str1, new object[] { (object)(AnsiCCore.Runtime.Library.CMath.Pow(2.0, 10.0)) });
+        AnsiCCore.Runtime.Library.CStdLib.Printf(__mem, __str0, new object[] { (object)(AnsiCCore.Runtime.Library.CMath.Sqrt(__mem, 2.0)) });
+        AnsiCCore.Runtime.Library.CStdLib.Printf(__mem, __str1, new object[] { (object)(AnsiCCore.Runtime.Library.CMath.Pow(__mem, 2.0, 10.0)) });
         AnsiCCore.Runtime.Library.CStdLib.Printf(__mem, __str2, new object[] { (object)(AnsiCCore.Runtime.Library.CMath.Sin((3.14159265358979323846 / 6.0))) });
         AnsiCCore.Runtime.Library.CStdLib.Printf(__mem, __str3, new object[] { (object)(AnsiCCore.Runtime.Library.CMath.Floor(3.7)), (object)(AnsiCCore.Runtime.Library.CMath.Ceil(3.2)) });
         AnsiCCore.Runtime.Library.CStdLib.Printf(__mem, __str4, new object[] { (object)(AnsiCCore.Runtime.Library.CMath.Fmod(10.0, 3.0)) });

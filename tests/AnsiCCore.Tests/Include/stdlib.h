@@ -14,6 +14,8 @@ div_t div(int numer, int denom);
 ldiv_t ldiv(long numer, long denom);
 char *getenv(const char *name);
 int system(const char *command);
+void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *));
+void *bsearch(const void *key, const void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *));
 int atoi(const char *s);
 long atol(const char *s);
 double atof(const char *s);
