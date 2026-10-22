@@ -1,3 +1,5 @@
+using AnsiCCore.Runtime.Memory;
+
 namespace AnsiCCore.Runtime.Library;
 
 /// <summary>
@@ -7,6 +9,25 @@ namespace AnsiCCore.Runtime.Library;
 /// </summary>
 public static class CMath
 {
+    /// <summary><c>frexp</c>: splits x into a normalized mantissa in [0.5, 1) and an exponent (written through exp).</summary>
+    [CExport("frexp")]
+    public static double Frexp(CMemory mem, double x, CPtr exp)
+    {
+        if (x == 0 || double.IsNaN(x) || double.IsInfinity(x)) { mem.WriteInt32(exp, 0); return x; }
+        int e = Math.ILogB(x) + 1;
+        mem.WriteInt32(exp, e);
+        return Math.ScaleB(x, -e);
+    }
+
+    /// <summary><c>modf</c>: splits x into integral (written through iptr) and fractional parts.</summary>
+    [CExport("modf")]
+    public static double Modf(CMemory mem, double x, CPtr iptr)
+    {
+        double integral = Math.Truncate(x);
+        mem.WriteDouble(iptr, integral);
+        return x - integral;
+    }
+
     [CExport("sin")] public static double Sin(double x) => Math.Sin(x);
     [CExport("cos")] public static double Cos(double x) => Math.Cos(x);
     [CExport("tan")] public static double Tan(double x) => Math.Tan(x);

@@ -5,7 +5,15 @@ void *malloc(size_t size);
 void *calloc(size_t count, size_t size);
 void *realloc(void *ptr, size_t size);
 void free(void *ptr);
+typedef struct { int quot; int rem; } div_t;
+typedef struct { long quot; long rem; } ldiv_t;
+
 int abs(int n);
+long labs(long n);
+div_t div(int numer, int denom);
+ldiv_t ldiv(long numer, long denom);
+char *getenv(const char *name);
+int system(const char *command);
 int atoi(const char *s);
 long atol(const char *s);
 double atof(const char *s);

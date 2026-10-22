@@ -4,6 +4,8 @@
 #define M_PI 3.14159265358979323846
 #define M_E 2.71828182845904523536
 
+double frexp(double x, int *exp);
+double modf(double x, double *iptr);
 double sin(double x);
 double cos(double x);
 double tan(double x);

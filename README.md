@@ -121,20 +121,21 @@ Stub headers live in `tests/AnsiCCore.Tests/Include/`; implementations are `[CEx
 
 | Header | Coverage |
 |---|---|
-| `<math.h>` | Near-complete — all C89 elementary functions except `modf`, `frexp` (plus C99 extras) |
-| `<ctype.h>` | `isdigit` `isalpha` `isalnum` `isspace` `isupper` `islower` `toupper` `tolower` (missing `isxdigit`, `isprint`, `ispunct`, `iscntrl`, `isgraph`) |
-| `<stdarg.h>` | Functional — `va_list`/`va_start`/`va_arg`/`va_end` for user variadic functions |
-| `<stdlib.h>` | `malloc` `calloc` `realloc` `free`; `abs` `atoi` `atol` `atof` `strtol` `strtoul` `strtod`; `rand` `srand` (`RAND_MAX`); `exit` `abort` `atexit` (`EXIT_SUCCESS`/`EXIT_FAILURE`). Missing: `qsort` `bsearch` `labs` `div`/`ldiv`, `getenv` `system` |
-| `<string.h>` | `strlen` `strcmp` `strncmp` `strcpy` `strcat` `strchr` `memcpy` `memmove` `memset` `memcmp` (missing `strncpy` `strstr` `strrchr` `strtok` `memchr` …) |
-| `<stdio.h>` | `printf` `fprintf` `sprintf` family, `fopen`/`fclose`/`fread`/`fwrite`/`fseek`/`ftell`/`rewind`, `putchar`/`puts`/`fputc`/`fputs`/`getchar`/`fgetc`/`fgets`, `scanf`/`fscanf`. Missing: `fflush` `feof`/`ferror` `ungetc` `sscanf`; binary mode (`"rb"`) is ignored |
+| `<math.h>` | ✅ Complete — all 22 C89 functions (incl. `frexp`/`modf`), plus C99 extras |
+| `<ctype.h>` | ✅ Complete — all 13 classifiers/converters |
+| `<string.h>` | ✅ Complete — all 22 C89 functions |
+| `<stddef.h>` | ✅ Complete — `size_t`, `NULL`, `ptrdiff_t`, `wchar_t`, `offsetof` |
+| `<limits.h>` | ✅ Complete — macro header |
+| `<float.h>` | ✅ Complete — macro header |
+| `<stdarg.h>` | ✅ Functional — `va_list`/`va_start`/`va_arg`/`va_end` for user variadic functions |
+| `<stdlib.h>` | 21/26 — heap, `abs`/`labs`/`div`/`ldiv`, the `strto*`/`ato*` family, `rand`/`srand`, `exit`/`abort`/`atexit`, `getenv`/`system`. Missing: `qsort`, `bsearch`, the multibyte functions |
+| `<stdio.h>` | 28/41 — the `printf`/`scanf` families (incl. `sscanf`), `fopen`/`fclose`/`fread`/`fwrite`/`fseek`/`ftell`/`rewind`, char I/O incl. `getc`/`putc`/`ungetc`, `feof`/`ferror`/`clearerr`, `remove`/`rename`. Missing: `fflush`, `freopen`, `setvbuf`, `tmpfile`/`tmpnam`, `v*printf`, `fgetpos`/`fsetpos`, `perror`; binary mode (`"rb"`) is ignored |
 | `<time.h>` | `time` `clock` `difftime` (no calendar: `localtime`/`strftime`/`struct tm`) |
-| `<stddef.h>` | `size_t`, `NULL` (missing `ptrdiff_t`, `offsetof`) |
 
 **printf conversions:** `%d %i %u %o %x %X %p %c %s %f %e %E %g %G %%`, with flags `- + space 0`,
 field width and precision (literal or `*`), and tolerated length modifiers.
 
-**Entirely absent headers:** `<assert.h>`, `<errno.h>`, `<setjmp.h>`, `<signal.h>`, `<locale.h>`,
-`<limits.h>`, `<float.h>`.
+**Entirely absent headers:** `<assert.h>`, `<errno.h>`, `<setjmp.h>`, `<signal.h>`, `<locale.h>`.
 
 ## Testing approach
 
@@ -151,6 +152,7 @@ Near-term, high-value next steps:
 - **Function pointers stored in memory** → unblocks `qsort`/`bsearch` (callback-to-export
   marshalling already works via `atexit`).
 - **K&R function bodies** at emit.
-- libc breadth: `<limits.h>`/`<float.h>` (pure macro headers), remaining `<string.h>` functions,
-  `sscanf`, `<time.h>` calendar machinery.
+- libc: `<errno.h>` + wiring it into `strto*`/math/IO; `v*printf` (forward a `va_list` into the
+  formatter); `<time.h>` calendar machinery (`struct tm`, `localtime`/`strftime`); stdio buffering
+  (`fflush`/`setvbuf`); `<locale.h>` C-locale stub; `assert`.
 - `<setjmp.h>` (`setjmp`/`longjmp`) — the one structurally hard item (non-local control flow).

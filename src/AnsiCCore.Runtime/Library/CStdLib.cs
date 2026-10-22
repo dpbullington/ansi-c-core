@@ -20,6 +20,11 @@ public static class CStdLib
     [CExport("isspace")] public static int IsSpace(int c) => c is ' ' or '\t' or '\n' or '\r' or '\v' or '\f' ? 1 : 0;
     [CExport("isupper")] public static int IsUpper(int c) => c is >= 'A' and <= 'Z' ? 1 : 0;
     [CExport("islower")] public static int IsLower(int c) => c is >= 'a' and <= 'z' ? 1 : 0;
+    [CExport("isxdigit")] public static int IsXdigit(int c) => c is (>= '0' and <= '9') or (>= 'a' and <= 'f') or (>= 'A' and <= 'F') ? 1 : 0;
+    [CExport("iscntrl")] public static int IsCntrl(int c) => c is (>= 0 and <= 0x1f) or 0x7f ? 1 : 0;
+    [CExport("isprint")] public static int IsPrint(int c) => c is >= 0x20 and <= 0x7e ? 1 : 0;
+    [CExport("isgraph")] public static int IsGraph(int c) => c is >= 0x21 and <= 0x7e ? 1 : 0;
+    [CExport("ispunct")] public static int IsPunct(int c) => IsGraph(c) != 0 && IsAlnum(c) == 0 ? 1 : 0;
     [CExport("toupper")] public static int ToUpper(int c) => c is >= 'a' and <= 'z' ? c - 32 : c;
     [CExport("tolower")] public static int ToLower(int c) => c is >= 'A' and <= 'Z' ? c + 32 : c;
 
@@ -160,6 +165,60 @@ public static class CStdLib
     [CExport("srand")]
     public static void Srand(CMemory mem, uint seed) => Seed(mem)[0] = seed;
 
+    // --- <stdlib.h> integer arithmetic & environment ----------------------
+
+    [CExport("labs")] public static long Labs(long n) => n < 0 ? -n : n;
+
+    // div_t / ldiv_t are returned by value: {quot, rem}. The emitter treats a struct return as a
+    // CPtr to its storage, so allocate the pair and let the matching struct layout read it back.
+    [CExport("div")]
+    public static CPtr Div(CMemory mem, int numer, int denom)
+    {
+        var r = mem.Allocate(8, RegionKind.Static);
+        mem.WriteInt32(r, numer / denom);
+        mem.WriteInt32(r + 4, numer % denom);
+        return r;
+    }
+
+    [CExport("ldiv")]
+    public static CPtr Ldiv(CMemory mem, long numer, long denom)
+    {
+        var r = mem.Allocate(16, RegionKind.Static);
+        mem.WriteInt64(r, numer / denom);
+        mem.WriteInt64(r + 8, numer % denom);
+        return r;
+    }
+
+    [CExport("getenv")]
+    public static CPtr Getenv(CMemory mem, CPtr name)
+    {
+        string? value = Environment.GetEnvironmentVariable(ReadCString(mem, name));
+        return value is null ? CPtr.Null : CMarshal.FromManaged(mem, value);
+    }
+
+    /// <summary><c>system</c>: runs the command through the platform shell, returning its exit code
+    /// (a null command reports that a command processor is available).</summary>
+    [CExport("system")]
+    public static int System(CMemory mem, CPtr command)
+    {
+        if (command == CPtr.Null) return 1;
+        bool windows = Environment.OSVersion.Platform == PlatformID.Win32NT;
+        var psi = new global::System.Diagnostics.ProcessStartInfo { FileName = windows ? "cmd.exe" : "/bin/sh", UseShellExecute = false };
+        psi.ArgumentList.Add(windows ? "/c" : "-c");
+        psi.ArgumentList.Add(ReadCString(mem, command));
+        try
+        {
+            using var p = global::System.Diagnostics.Process.Start(psi);
+            if (p is null) return -1;
+            p.WaitForExit();
+            return p.ExitCode;
+        }
+        catch (Exception ex) when (ex is global::System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            return -1;
+        }
+    }
+
     // --- <stdlib.h> heap --------------------------------------------------
 
     [CExport("malloc")] public static CPtr Malloc(CMemory mem, long size) => mem.Malloc(size);
@@ -235,6 +294,147 @@ public static class CStdLib
         return dst;
     }
 
+    [CExport("strncpy")]
+    public static CPtr Strncpy(CMemory mem, CPtr dst, CPtr src, long n)
+    {
+        long i = 0;
+        while (i < n) { byte c = mem.ReadUInt8(src + i); mem.WriteUInt8(dst + i, c); i++; if (c == 0) break; }
+        while (i < n) { mem.WriteUInt8(dst + i, 0); i++; } // pad the remainder with NUL (C89 §7.11.2.4)
+        return dst;
+    }
+
+    [CExport("strncat")]
+    public static CPtr Strncat(CMemory mem, CPtr dst, CPtr src, long n)
+    {
+        long end = Strlen(mem, dst), i = 0;
+        for (; i < n; i++) { byte c = mem.ReadUInt8(src + i); if (c == 0) break; mem.WriteUInt8(dst + end + i, c); }
+        mem.WriteUInt8(dst + end + i, 0);
+        return dst;
+    }
+
+    [CExport("strrchr")]
+    public static CPtr Strrchr(CMemory mem, CPtr s, int c)
+    {
+        byte target = unchecked((byte)c);
+        CPtr last = CPtr.Null;
+        for (long i = 0; ; i++)
+        {
+            byte ch = mem.ReadUInt8(s + i);
+            if (ch == target) last = s + i;
+            if (ch == 0) return last; // matches the terminator too when c == 0
+        }
+    }
+
+    [CExport("strstr")]
+    public static CPtr Strstr(CMemory mem, CPtr hay, CPtr needle)
+    {
+        if (mem.ReadUInt8(needle) == 0) return hay; // empty needle matches at the start
+        for (long i = 0; mem.ReadUInt8(hay + i) != 0; i++)
+            for (long j = 0; ; j++)
+            {
+                byte nc = mem.ReadUInt8(needle + j);
+                if (nc == 0) return hay + i; // whole needle matched
+                if (mem.ReadUInt8(hay + i + j) != nc) break;
+            }
+        return CPtr.Null;
+    }
+
+    [CExport("memchr")]
+    public static CPtr Memchr(CMemory mem, CPtr s, int c, long n)
+    {
+        byte target = unchecked((byte)c);
+        for (long i = 0; i < n; i++) if (mem.ReadUInt8(s + i) == target) return s + i;
+        return CPtr.Null;
+    }
+
+    [CExport("strspn")]
+    public static long Strspn(CMemory mem, CPtr s, CPtr accept)
+    {
+        long i = 0;
+        byte c;
+        while ((c = mem.ReadUInt8(s + i)) != 0 && InSet(mem, accept, c)) i++;
+        return i;
+    }
+
+    [CExport("strcspn")]
+    public static long Strcspn(CMemory mem, CPtr s, CPtr reject)
+    {
+        long i = 0;
+        byte c;
+        while ((c = mem.ReadUInt8(s + i)) != 0 && !InSet(mem, reject, c)) i++;
+        return i;
+    }
+
+    [CExport("strpbrk")]
+    public static CPtr Strpbrk(CMemory mem, CPtr s, CPtr accept)
+    {
+        for (long i = 0; ; i++)
+        {
+            byte c = mem.ReadUInt8(s + i);
+            if (c == 0) return CPtr.Null;
+            if (InSet(mem, accept, c)) return s + i;
+        }
+    }
+
+    // strtok keeps a per-program saved position between calls (C89 §7.11.5.8).
+    private static readonly ConditionalWeakTable<CMemory, CPtr[]> StrtokSaved = new();
+
+    [CExport("strtok")]
+    public static CPtr Strtok(CMemory mem, CPtr s, CPtr delim)
+    {
+        var saved = StrtokSaved.GetValue(mem, _ => new[] { CPtr.Null });
+        CPtr cur = s != CPtr.Null ? s : saved[0];
+        if (cur == CPtr.Null) return CPtr.Null;
+
+        byte c;
+        while ((c = mem.ReadUInt8(cur)) != 0 && InSet(mem, delim, c)) cur += 1; // skip leading delimiters
+        if (c == 0) { saved[0] = CPtr.Null; return CPtr.Null; }
+
+        CPtr token = cur;
+        while ((c = mem.ReadUInt8(cur)) != 0 && !InSet(mem, delim, c)) cur += 1;
+        if (c != 0) { mem.WriteUInt8(cur, 0); saved[0] = cur + 1; } else saved[0] = CPtr.Null;
+        return token;
+    }
+
+    [CExport("strcoll")] public static int Strcoll(CMemory mem, CPtr a, CPtr b) => Strcmp(mem, a, b); // "C" locale
+
+    [CExport("strxfrm")]
+    public static long Strxfrm(CMemory mem, CPtr dst, CPtr src, long n)
+    {
+        long len = Strlen(mem, src); // "C" locale: the transform is an identity copy
+        if (n > 0)
+        {
+            long copy = Math.Min(len, n - 1);
+            for (long i = 0; i < copy; i++) mem.WriteUInt8(dst + i, mem.ReadUInt8(src + i));
+            mem.WriteUInt8(dst + copy, 0);
+        }
+        return len;
+    }
+
+    [CExport("strerror")]
+    public static CPtr Strerror(CMemory mem, int errnum) => CMarshal.FromManaged(mem, errnum switch
+    {
+        0 => "No error",
+        1 => "Operation not permitted",
+        2 => "No such file or directory",
+        13 => "Permission denied",
+        22 => "Invalid argument",
+        33 => "Numerical argument out of domain",  // EDOM
+        34 => "Numerical result out of range",      // ERANGE
+        _ => "Unknown error",
+    });
+
+    /// <summary>True if byte <paramref name="c"/> appears in the NUL-terminated set at <paramref name="set"/>.</summary>
+    private static bool InSet(CMemory mem, CPtr set, byte c)
+    {
+        for (long i = 0; ; i++)
+        {
+            byte s = mem.ReadUInt8(set + i);
+            if (s == 0) return false;
+            if (s == c) return true;
+        }
+    }
+
     // --- <stdio.h> streams ------------------------------------------------
     //
     // FILE* is a sentinel pointer. The stub stdio.h defines stdin/stdout/stderr as
@@ -246,11 +446,15 @@ public static class CStdLib
         public enum Std { None, In, Out, Err }
         public Std Standard;
         public Stream? Stream;             // backing file (null for the standard streams)
+        public bool Eof;                   // set when a read hits end-of-input (feof)
+        public bool Error;                 // set on a stream error (ferror)
         private const int Empty = -2;
         private int _peek = Empty;         // one-byte lookahead for files (text parsing)
+        private int _unget = Empty;        // one-char ungetc pushback (any stream kind)
 
         public int Peek()
         {
+            if (_unget != Empty) return _unget;
             if (Standard == Std.In) return Console.In.Peek();
             if (Stream is null) return -1;
             if (_peek == Empty) _peek = Stream.ReadByte();
@@ -259,10 +463,23 @@ public static class CStdLib
 
         public int Read()
         {
-            if (Standard == Std.In) return Console.In.Read();
-            if (Stream is null) return -1;
-            if (_peek != Empty) { int v = _peek; _peek = Empty; return v; }
-            return Stream.ReadByte();
+            if (_unget != Empty) { int v = _unget; _unget = Empty; return v; } // pushback is never EOF
+            int r;
+            if (Standard == Std.In) r = Console.In.Read();
+            else if (Stream is null) r = -1;
+            else if (_peek != Empty) { r = _peek; _peek = Empty; }
+            else r = Stream.ReadByte();
+            if (r < 0) Eof = true;
+            return r;
+        }
+
+        /// <summary>Pushes one character back onto the stream (C89 §7.9.7.11 guarantees one level).</summary>
+        public bool Ungetc(int c)
+        {
+            if (c < 0 || _unget != Empty) return false;
+            _unget = c;
+            Eof = false;
+            return true;
         }
 
         public void WriteByte(byte b)
@@ -600,10 +817,49 @@ public static class CStdLib
     // --- <stdio.h> input --------------------------------------------------
 
     [CExport("getchar")]
-    public static int Getchar(CMemory mem) => Console.In.Read(); // -1 at end of input == EOF
+    public static int Getchar(CMemory mem) => Handle(mem, new CPtr(3)).Read(); // stdin; -1 at EOF
 
     [CExport("fgetc")]
     public static int Fgetc(CMemory mem, CPtr stream) => Handle(mem, stream).Read();
+
+    [CExport("getc")] public static int Getc(CMemory mem, CPtr stream) => Handle(mem, stream).Read();
+    [CExport("putc")] public static int Putc(CMemory mem, int c, CPtr stream) => Fputc(mem, c, stream);
+
+    [CExport("feof")] public static int Feof(CMemory mem, CPtr stream) => Handle(mem, stream).Eof ? 1 : 0;
+    [CExport("ferror")] public static int Ferror(CMemory mem, CPtr stream) => Handle(mem, stream).Error ? 1 : 0;
+
+    [CExport("clearerr")]
+    public static void Clearerr(CMemory mem, CPtr stream)
+    {
+        var f = Handle(mem, stream);
+        f.Eof = false;
+        f.Error = false;
+    }
+
+    [CExport("ungetc")]
+    public static int Ungetc(CMemory mem, int c, CPtr stream)
+        => c < 0 ? -1 : Handle(mem, stream).Ungetc(c) ? c & 0xFF : -1;
+
+    [CExport("remove")]
+    public static int Remove(CMemory mem, CPtr path)
+    {
+        string file = ReadCString(mem, path);
+        try
+        {
+            // C requires a nonzero result when the file does not exist; .NET's Delete is silent there.
+            if (File.Exists(file)) { File.Delete(file); return 0; }
+            if (Directory.Exists(file)) { Directory.Delete(file); return 0; }
+            return -1;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return -1; }
+    }
+
+    [CExport("rename")]
+    public static int Rename(CMemory mem, CPtr from, CPtr to)
+    {
+        try { File.Move(ReadCString(mem, from), ReadCString(mem, to), overwrite: true); return 0; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return -1; }
+    }
 
     [CExport("fgets")]
     public static CPtr Fgets(CMemory mem, CPtr buffer, int size, CPtr stream)
@@ -629,6 +885,15 @@ public static class CStdLib
 
     [CExport("fscanf")]
     public static int Fscanf(CMemory mem, CPtr stream, CPtr format, params object[] args) => RunScanf(mem, Handle(mem, stream), format, args);
+
+    [CExport("sscanf")]
+    public static int Sscanf(CMemory mem, CPtr s, CPtr format, params object[] args)
+    {
+        string input = ReadCString(mem, s);
+        var bytes = new byte[input.Length];
+        for (int i = 0; i < input.Length; i++) bytes[i] = (byte)input[i];
+        return RunScanf(mem, new CFile { Stream = new MemoryStream(bytes) }, format, args); // read from the string
+    }
 
     /// <summary>
     /// A small <c>scanf</c>: supports <c>%d %u %x %f (and %lf) %c %s %%</c> with an optional field
