@@ -441,7 +441,7 @@ public sealed class Preprocessor
                     if (!macro.IsFunctionLike)
                     {
                         var hs = t.HideSet.Add(macro.Name);
-                        var repl = Subst(macro, args: null, hs);
+                        var repl = Subst(macro, args: null, hs, t.Token.Location);
                         input.RemoveRange(pos, 1);
                         input.InsertRange(pos, repl);
                         continue;
@@ -454,7 +454,7 @@ public sealed class Preprocessor
                         if (args != null)
                         {
                             var hs = t.HideSet.Intersect(closeParen.HideSet).Add(macro.Name);
-                            var repl = Subst(macro, args, hs);
+                            var repl = Subst(macro, args, hs, t.Token.Location);
                             input.RemoveRange(pos, endExclusive - pos);
                             input.InsertRange(pos, repl);
                             continue;
@@ -530,8 +530,10 @@ public sealed class Preprocessor
         return args;
     }
 
-    /// <summary>Substitutes a macro body: parameter replacement, <c>#</c> stringize, <c>##</c> paste.</summary>
-    private List<PpToken> Subst(Macro macro, List<List<PpToken>>? args, ImmutableHashSet<string> hideSet)
+    /// <summary>Substitutes a macro body: parameter replacement, <c>#</c> stringize, <c>##</c> paste.
+    /// <paramref name="invocation"/> is the macro-use location, stamped onto any <c>__LINE__</c>/
+    /// <c>__FILE__</c> in the body so they report the use site, not the definition site.</summary>
+    private List<PpToken> Subst(Macro macro, List<List<PpToken>>? args, ImmutableHashSet<string> hideSet, SourceLocation invocation)
     {
         var paramIndex = new Dictionary<string, int>(StringComparer.Ordinal);
         for (int p = 0; p < macro.Parameters.Count; p++)
@@ -581,7 +583,7 @@ public sealed class Preprocessor
                     result.Add(raw.Count == 0 ? PpToken.Placemarker() : raw[0]);
                     for (int k = 1; k < raw.Count; k++) result.Add(raw[k]);
                 }
-                else result.Add(PpToken.From(cur));
+                else result.Add(StampDynamic(cur, invocation));
                 i++;
                 continue;
             }
@@ -594,7 +596,7 @@ public sealed class Preprocessor
                 continue;
             }
 
-            result.Add(PpToken.From(cur));
+            result.Add(StampDynamic(cur, invocation));
             i++;
         }
 
@@ -604,6 +606,12 @@ public sealed class Preprocessor
             .Select(pp => pp.WithHideSet(pp.HideSet.Union(hideSet)))
             .ToList();
     }
+
+    /// <summary>Copies a body token, relocating <c>__LINE__</c>/<c>__FILE__</c> to the invocation site.</summary>
+    private static PpToken StampDynamic(in Token tok, SourceLocation invocation)
+        => tok.Text is "__LINE__" or "__FILE__"
+            ? PpToken.From(tok with { Location = invocation })
+            : PpToken.From(tok);
 
     private static bool IsParamToken(in Token tok, Dictionary<string, int> paramIndex, out int idx)
     {

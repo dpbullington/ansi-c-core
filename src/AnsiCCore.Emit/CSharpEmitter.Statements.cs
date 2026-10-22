@@ -9,9 +9,23 @@ public sealed partial class CSharpEmitter
     private void EmitBlock(CompoundStatement block)
     {
         OpenBrace();
-        foreach (var item in block.Items)
-            EmitBlockItem(item);
+        EmitBlockItems(block.Items);
         CloseBrace();
+    }
+
+    /// <summary>Emits a block's items, wrapping the tail from the first setjmp occurrence onward in a
+    /// retry region (see EmitSetjmpGuard) so a longjmp re-enters it.</summary>
+    private void EmitBlockItems(IReadOnlyList<Node> items)
+    {
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (ItemSetjmpCall(items[i]) is { } sjCall)
+            {
+                EmitSetjmpGuard(items, i, sjCall);
+                return; // the guard emitted every remaining item
+            }
+            EmitBlockItem(items[i]);
+        }
     }
 
     private void EmitBlockItem(Node item)
@@ -159,6 +173,70 @@ public sealed partial class CSharpEmitter
             default:
                 throw new EmitException($"statement '{statement.GetType().Name}' is not supported yet");
         }
+    }
+
+    // --- setjmp / longjmp -------------------------------------------------
+
+    private readonly Dictionary<CallExpression, string> _setjmpVars = new();
+    private int _setjmpCounter;
+
+    /// <summary>Finds a <c>setjmp(...)</c> call reachable in a block item (a declaration initializer,
+    /// an expression statement, or an if/switch controlling expression); otherwise null.</summary>
+    private static CallExpression? ItemSetjmpCall(Node item) => item switch
+    {
+        Declaration d => d.InitDeclarators.Select(x => x.Initializer).OfType<ExpressionInitializer>()
+            .Select(x => FindSetjmpCall(x.Expression)).FirstOrDefault(c => c is not null),
+        ExpressionStatement { Expression: { } e } => FindSetjmpCall(e),
+        IfStatement i => FindSetjmpCall(i.Condition),
+        SwitchStatement s => FindSetjmpCall(s.Expression),
+        _ => null,
+    };
+
+    /// <summary>Finds a direct <c>setjmp(...)</c> call within an expression, through the common
+    /// wrappers (comparisons, assignment RHS, casts, unary).</summary>
+    private static CallExpression? FindSetjmpCall(Expression e) => e switch
+    {
+        CallExpression { Callee: IdentifierExpression { Name: "setjmp" } } c => c,
+        BinaryExpression b => FindSetjmpCall(b.Left) ?? FindSetjmpCall(b.Right),
+        AssignmentExpression a => FindSetjmpCall(a.Value),
+        UnaryExpression u => FindSetjmpCall(u.Operand),
+        CastExpression cast => FindSetjmpCall(cast.Operand),
+        _ => null,
+    };
+
+    /// <summary>
+    /// Emits <paramref name="items"/> from <paramref name="start"/> onward inside a goto-based retry
+    /// region. On entry the jmp_buf is armed and the setjmp call stands in for a result variable
+    /// (0 the first time); a matching longjmp re-enters the region with the thrown value. The region
+    /// uses labels rather than a loop so that any C <c>break</c>/<c>continue</c> inside it still
+    /// targets the program's own enclosing loop/switch.
+    /// </summary>
+    private void EmitSetjmpGuard(IReadOnlyList<Node> items, int start, CallExpression sjCall)
+    {
+        if (sjCall.Arguments.Count != 1)
+            throw new EmitException("setjmp expects exactly one argument");
+
+        string env = EmitValue(sjCall.Arguments[0]);
+        int n = _setjmpCounter++;
+        string sj = $"__sj{n}", tok = $"__sjtok{n}", ex = $"__sje{n}", retry = $"__sjretry{n}", done = $"__sjdone{n}";
+
+        Line($"int {sj} = 0;");
+        Line($"long {tok};");
+        Line($"{retry}:");
+        Line($"{tok} = AnsiCCore.Runtime.Library.CSetjmp.Arm(__mem, {env});");
+        Line("try");
+        OpenBrace();
+        _setjmpVars[sjCall] = sj;
+        for (int k = start; k < items.Count; k++) EmitBlockItem(items[k]);
+        _setjmpVars.Remove(sjCall);
+        Line($"goto {done};");
+        CloseBrace();
+        Line($"catch (AnsiCCore.Runtime.Library.CLongjmp {ex}) when ({ex}.Token == {tok})");
+        OpenBrace();
+        Line($"{sj} = {ex}.Value;");
+        Line($"goto {retry};");
+        CloseBrace();
+        Line($"{done}: ;");
     }
 
     private void EmitCaseLabel(Statement node, string? label, Statement inner)

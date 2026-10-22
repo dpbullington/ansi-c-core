@@ -200,8 +200,7 @@ public sealed partial class CSharpEmitter
 
         OpenBrace();
         EmitParameterSpilling(f, ft);
-        foreach (var item in f.Body.Items)
-            EmitBlockItem(item);
+        EmitBlockItems(f.Body.Items);
         CloseBrace();
 
         _currentReturnType = null;

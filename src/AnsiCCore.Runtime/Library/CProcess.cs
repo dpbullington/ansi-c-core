@@ -49,6 +49,18 @@ public static class CProcess
     public static void Abort() => throw new CAbortException();
 
     /// <summary>
+    /// The intrinsic behind the <c>assert</c> macro: prints the failed expression and location to
+    /// stderr, then aborts. Declared to return <c>int</c> so the macro can use it in a ternary
+    /// (<c>(e) ? 0 : __assert_fail(...)</c>); it never actually returns.
+    /// </summary>
+    [CExport("__assert_fail")]
+    public static int AssertFail(CMemory mem, CPtr expr, CPtr file, int line)
+    {
+        Console.Error.Write($"Assertion failed: {CMarshal.ToManaged(mem, expr)}, file {CMarshal.ToManaged(mem, file)}, line {line}\n");
+        throw new CAbortException();
+    }
+
+    /// <summary>
     /// Runs and clears the registered <c>atexit</c> handlers in reverse order. Called by <c>exit</c>
     /// and by the generated entry point when <c>main</c> returns normally (C89 §5.1.2.2.3 makes the
     /// two equivalent).

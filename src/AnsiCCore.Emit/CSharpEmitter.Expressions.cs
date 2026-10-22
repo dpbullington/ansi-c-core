@@ -398,6 +398,13 @@ public sealed partial class CSharpEmitter
         if (call.Callee is IdentifierExpression { Name: "__va_start" })
             return "__va";
 
+        // setjmp is handled by the enclosing if/switch guard (EmitSetjmpGuard); inside it the call
+        // stands in for the result variable. Anywhere else it is unsupported.
+        if (call.Callee is IdentifierExpression { Name: "setjmp" })
+            return _setjmpVars.TryGetValue(call, out var sjVar)
+                ? sjVar
+                : throw new EmitException("setjmp is only supported as the controlling expression of an 'if' or 'switch'");
+
         if (ResolveExport(call) is { } export)
             return EmitExportedCall(call, export);
 
@@ -518,6 +525,9 @@ public sealed partial class CSharpEmitter
             // (void)expr discards the value: emit the operand so it is still evaluated for its side
             // effects; the surrounding context (comma operand, statement) throws the result away.
             VoidType => EmitValue(cast.Operand),
+            // Function pointers are delegates, not CPtr: a null constant casts to a null delegate,
+            // and a function-pointer source passes through (e.g. SIG_DFL, assigning a handler).
+            _ when TypeMapper.IsFunctionPointer(target.Type) => IsNullConstant(cast.Operand) ? "null" : EmitValue(cast.Operand),
             PointerType when IsNullConstant(cast.Operand) => "CPtr.Null",
             PointerType when source is PointerType or ArrayType => EmitValue(cast.Operand),
             PointerType => $"new CPtr(unchecked((ulong)({EmitValue(cast.Operand)})))", // integer -> pointer

@@ -20,8 +20,9 @@ bounds/use-after-free checks. This faithfully supports the hard cases — stored
 ## Status
 
 Working end-to-end for a large C89 subset: the full pipeline lexes, preprocesses, parses, analyzes,
-and emits C# that compiles and runs. **423 tests pass** (unit + golden end-to-end), including 20
-whole-program compile-and-run golden programs.
+and emits C# that compiles and runs. **466 tests pass** (unit + golden end-to-end), including 20
+whole-program compile-and-run golden programs. The bundled C89 standard library is essentially
+complete (all standard headers present).
 
 The lexer, preprocessor, parser, and semantic type system are **near-complete for C89**. The
 remaining frontier is a short, well-marked list in the emitter plus continued breadth in the
@@ -132,12 +133,19 @@ Stub headers live in `tests/AnsiCCore.Tests/Include/`; implementations are `[CEx
 | `<time.h>` | ✅ Complete — `time`/`clock`/`difftime` plus calendar (`gmtime`/`localtime`/`mktime`/`asctime`/`ctime`/`strftime`, `struct tm`) |
 | `<errno.h>` | ✅ `errno` + `EDOM`/`ERANGE`, set by `strto*` and the math functions |
 | `<locale.h>` | ✅ C-locale stub — `setlocale`/`localeconv` |
+| `<assert.h>` | ✅ `assert` (honors `NDEBUG`, reports the call site) |
+| `<signal.h>` | ✅ `signal`/`raise` with synchronous delivery (`SIG_DFL`/`SIG_IGN`/`SIG_ERR`) |
+| `<setjmp.h>` | ✅ `setjmp`/`longjmp` — see note below |
 | `<stdio.h>` | ~40/41 — the `printf`/`scanf`/`v*printf` families (incl. `sscanf`), file access incl. `freopen`/`tmpfile`/`tmpnam`, buffering no-ops (`fflush`/`setvbuf`), char I/O (`getc`/`putc`/`ungetc`), positioning (`fseek`/`ftell`/`fgetpos`/`fsetpos`/`rewind`), state (`feof`/`ferror`/`clearerr`), `remove`/`rename`/`perror`. Omitted: `gets` (unsafe); binary mode (`"rb"`) is ignored |
 
 **printf conversions:** `%d %i %u %o %x %X %p %c %s %f %e %E %g %G %%`, with flags `- + space 0`,
 field width and precision (literal or `*`), and tolerated length modifiers.
 
-**Entirely absent headers:** `<assert.h>`, `<setjmp.h>`, `<signal.h>`.
+**All C89 standard headers are present.** `setjmp`/`longjmp` work by an emitter transformation:
+a `longjmp` throws across the stack to a loop+try/catch the emitter wraps around the block from
+the `setjmp` onward. `setjmp` is therefore supported where it controls flow — as an `if`/`switch`
+controlling expression or the initializer/right-hand side of a declaration/assignment (the
+canonical idioms); used elsewhere it is a clear emit error.
 
 ## Testing approach
 
@@ -149,12 +157,13 @@ type system, and the runtime memory model.
 
 ## Roadmap
 
-Near-term, high-value next steps:
+The C89 standard library is essentially complete; the remaining gaps are language-level emit
+constructs:
 
 - **Function pointers stored in memory** (fn-pointer struct fields / address-taken fn-pointer
-  variables) — the last open language-level emit gap. (Passing a function *by name* as a call
-  argument already works, so `qsort`/`atexit`-style callbacks are fine.)
+  variables) — the last notable language-level emit gap. (Passing a function *by name* as a call
+  argument already works — `qsort`/`atexit`/`signal` callbacks are fine — and a null function
+  pointer now casts correctly.)
 - **K&R function bodies** at emit.
-- libc tail: `<assert.h>` (`assert` macro + `NDEBUG`, atop the existing `CProcess.Abort`); real
-  stdio buffering if ever needed; `<signal.h>` stub.
-- `<setjmp.h>` (`setjmp`/`longjmp`) — the one structurally hard item (non-local control flow).
+- Wider `setjmp` positions if needed (today: if/switch condition, or a declaration/assignment of
+  its result — the canonical idioms); `trigraphs`; true extended `long double` precision.
