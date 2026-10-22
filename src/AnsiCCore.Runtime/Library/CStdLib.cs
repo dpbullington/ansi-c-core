@@ -257,6 +257,75 @@ public static class CStdLib
         return CPtr.Null;
     }
 
+    // --- <stdlib.h> multibyte (single-byte "C" locale: each char maps to itself) ----
+
+    [CExport("mblen")]
+    public static int Mblen(CMemory mem, CPtr s, long n) => s.IsNull ? 0 : n <= 0 ? -1 : mem.ReadUInt8(s) == 0 ? 0 : 1;
+
+    [CExport("mbtowc")]
+    public static int Mbtowc(CMemory mem, CPtr pwc, CPtr s, long n)
+    {
+        if (s.IsNull) return 0;
+        if (n <= 0) return -1;
+        byte b = mem.ReadUInt8(s);
+        if (!pwc.IsNull) mem.WriteInt32(pwc, b); // wchar_t == int
+        return b == 0 ? 0 : 1;
+    }
+
+    [CExport("wctomb")]
+    public static int Wctomb(CMemory mem, CPtr s, int wc)
+    {
+        if (s.IsNull) return 0;
+        mem.WriteUInt8(s, (byte)wc);
+        return 1;
+    }
+
+    [CExport("mbstowcs")]
+    public static long Mbstowcs(CMemory mem, CPtr pwcs, CPtr s, long n)
+    {
+        long i = 0;
+        for (; i < n; i++)
+        {
+            byte b = mem.ReadUInt8(s + i);
+            if (!pwcs.IsNull) mem.WriteInt32(pwcs + i * 4, b);
+            if (b == 0) return i; // count excludes the terminator
+        }
+        return i;
+    }
+
+    [CExport("wcstombs")]
+    public static long Wcstombs(CMemory mem, CPtr s, CPtr pwcs, long n)
+    {
+        long i = 0;
+        for (; i < n; i++)
+        {
+            int wc = mem.ReadInt32(pwcs + i * 4);
+            if (!s.IsNull) mem.WriteUInt8(s + i, (byte)wc);
+            if (wc == 0) return i;
+        }
+        return i;
+    }
+
+    // --- <locale.h> (only the "C" locale is supported) --------------------
+
+    [CExport("setlocale")]
+    public static CPtr Setlocale(CMemory mem, int category, CPtr locale) => CMarshal.FromManaged(mem, "C");
+
+    private static readonly ConditionalWeakTable<CMemory, CPtr[]> LconvCells = new();
+
+    /// <summary>Returns the "C" locale's struct lconv: decimal_point ".", every other string empty,
+    /// and every char member CHAR_MAX (meaning "not available"). Layout matches the stub locale.h.</summary>
+    [CExport("localeconv")]
+    public static CPtr Localeconv(CMemory mem) => LconvCells.GetValue(mem, m =>
+    {
+        var lc = m.Allocate(88, RegionKind.Static); // 10 pointers + 8 chars (LP64)
+        CPtr dot = CMarshal.FromManaged(m, "."), empty = CMarshal.FromManaged(m, "");
+        m.WritePointer(lc, dot);
+        for (int off = 8; off <= 72; off += 8) m.WritePointer(lc + off, empty);
+        for (int off = 80; off < 88; off++) m.WriteUInt8(lc + off, 127); // CHAR_MAX
+        return new[] { lc };
+    })[0];
+
     /// <summary><c>system</c>: runs the command through the platform shell, returning its exit code
     /// (a null command reports that a command processor is available).</summary>
     [CExport("system")]
@@ -567,6 +636,13 @@ public static class CStdLib
             return true;
         }
 
+        public void Flush()
+        {
+            if (Standard == Std.Out) Console.Out.Flush();
+            else if (Standard == Std.Err) Console.Error.Flush();
+            else Stream?.Flush();
+        }
+
         public void Dispose() { Stream?.Flush(); Stream?.Dispose(); }
     }
 
@@ -593,26 +669,93 @@ public static class CStdLib
     [CExport("fopen")]
     public static CPtr Fopen(CMemory mem, CPtr path, CPtr mode)
     {
-        string file = ReadCString(mem, path), m = ReadCString(mem, mode);
+        var stream = OpenFile(ReadCString(mem, path), ReadCString(mem, mode));
+        if (stream is null) return CPtr.Null;
+        var table = Table(mem);
+        ulong address = table.Next++;
+        table.Files[address] = new CFile { Stream = stream };
+        return new CPtr(address);
+    }
+
+    /// <summary>Opens a file for an fopen-style mode string ('b' is accepted and ignored), or null on failure.</summary>
+    private static FileStream? OpenFile(string path, string mode)
+    {
         try
         {
-            (FileMode fileMode, FileAccess access) = m.Length == 0 ? default : m[0] switch
+            (FileMode fileMode, FileAccess access) = mode.Length == 0 ? default : mode[0] switch
             {
-                'r' => (FileMode.Open, m.Contains('+') ? FileAccess.ReadWrite : FileAccess.Read),
-                'w' => (FileMode.Create, m.Contains('+') ? FileAccess.ReadWrite : FileAccess.Write),
+                'r' => (FileMode.Open, mode.Contains('+') ? FileAccess.ReadWrite : FileAccess.Read),
+                'w' => (FileMode.Create, mode.Contains('+') ? FileAccess.ReadWrite : FileAccess.Write),
                 'a' => (FileMode.Append, FileAccess.Write),
-                _ => throw new IOException($"unsupported fopen mode '{m}'"),
+                _ => throw new IOException($"unsupported fopen mode '{mode}'"),
             };
-
-            var table = Table(mem);
-            ulong address = table.Next++;
-            table.Files[address] = new CFile { Stream = new FileStream(file, fileMode, access) };
-            return new CPtr(address);
+            return new FileStream(path, fileMode, access);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
-            return CPtr.Null;
+            return null;
         }
+    }
+
+    [CExport("freopen")]
+    public static CPtr Freopen(CMemory mem, CPtr path, CPtr mode, CPtr stream)
+    {
+        var table = Table(mem);
+        if (table.Files.TryGetValue(stream.Address, out var old) && old.Standard == CFile.Std.None) old.Dispose();
+        var fs = OpenFile(ReadCString(mem, path), ReadCString(mem, mode));
+        if (fs is null) { table.Files.Remove(stream.Address); return CPtr.Null; }
+        table.Files[stream.Address] = new CFile { Stream = fs }; // reuse the same FILE* sentinel
+        return stream;
+    }
+
+    [CExport("fflush")]
+    public static int Fflush(CMemory mem, CPtr stream)
+    {
+        if (stream.IsNull) { foreach (var f in Table(mem).Files.Values) f.Flush(); return 0; } // flush all
+        Handle(mem, stream).Flush();
+        return 0;
+    }
+
+    [CExport("setbuf")] public static void Setbuf(CMemory mem, CPtr stream, CPtr buf) { } // unbuffered model: no-op
+    [CExport("setvbuf")] public static int Setvbuf(CMemory mem, CPtr stream, CPtr buf, int mode, long size) => 0;
+
+    [CExport("tmpfile")]
+    public static CPtr Tmpfile(CMemory mem)
+    {
+        try
+        {
+            var fs = new FileStream(Path.GetTempFileName(), FileMode.Create, FileAccess.ReadWrite, FileShare.None, 4096, FileOptions.DeleteOnClose);
+            var table = Table(mem);
+            ulong address = table.Next++;
+            table.Files[address] = new CFile { Stream = fs };
+            return new CPtr(address);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return CPtr.Null; }
+    }
+
+    private static readonly ConditionalWeakTable<CMemory, CPtr[]> TmpnamBuffers = new();
+
+    [CExport("tmpnam")]
+    public static CPtr Tmpnam(CMemory mem, CPtr s)
+    {
+        string name = Path.Combine(Path.GetTempPath(), "tmp" + Guid.NewGuid().ToString("N")[..8]);
+        CPtr buf = s.IsNull ? TmpnamBuffers.GetValue(mem, m => new[] { m.Allocate(256, RegionKind.Static) })[0] : s;
+        WriteCString(mem, buf, name);
+        return buf;
+    }
+
+    [CExport("fgetpos")]
+    public static int Fgetpos(CMemory mem, CPtr stream, CPtr pos) { mem.WriteInt64(pos, Handle(mem, stream).Position); return 0; }
+
+    [CExport("fsetpos")]
+    public static int Fsetpos(CMemory mem, CPtr stream, CPtr pos)
+        => Handle(mem, stream).Seek(mem.ReadInt64(pos), SeekOrigin.Begin) ? 0 : -1;
+
+    [CExport("perror")]
+    public static void Perror(CMemory mem, CPtr s)
+    {
+        string prefix = s.IsNull || mem.ReadUInt8(s) == 0 ? "" : ReadCString(mem, s) + ": ";
+        Console.Error.Write(prefix + ReadCString(mem, Strerror(mem, mem.ReadInt32(ErrnoLocation(mem)))) + "\n");
     }
 
     [CExport("fclose")]

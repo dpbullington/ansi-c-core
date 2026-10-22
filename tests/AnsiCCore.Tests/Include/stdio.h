@@ -12,6 +12,16 @@ typedef struct _IO_FILE FILE;
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
+#define BUFSIZ 8192
+#define FOPEN_MAX 16
+#define FILENAME_MAX 4096
+#define TMP_MAX 238328
+#define L_tmpnam 256
+#define _IOFBF 0
+#define _IOLBF 1
+#define _IONBF 2
+
+typedef long fpos_t;
 
 int printf(const char *format, ...);
 int fprintf(FILE *stream, const char *format, ...);
@@ -44,4 +54,13 @@ size_t fwrite(const void *ptr, size_t size, size_t count, FILE *stream);
 int fseek(FILE *stream, long offset, int whence);
 long ftell(FILE *stream);
 void rewind(FILE *stream);
+int fflush(FILE *stream);
+FILE *freopen(const char *path, const char *mode, FILE *stream);
+void setbuf(FILE *stream, char *buf);
+int setvbuf(FILE *stream, char *buf, int mode, size_t size);
+FILE *tmpfile(void);
+char *tmpnam(char *s);
+int fgetpos(FILE *stream, fpos_t *pos);
+int fsetpos(FILE *stream, const fpos_t *pos);
+void perror(const char *s);
 #endif
