@@ -54,6 +54,8 @@ public sealed partial class CSharpEmitter
         var type = _model.TypeOf(e)?.Type.Type ?? CTypes.Int;
         if (type is ArrayType or RecordType)
             return EmitAddress(e); // array decays to a pointer; a struct is referred to by address
+        if (TypeMapper.IsFunctionPointer(type)) // delegate read back from its token; parenthesized so it stays invocable
+            return $"(({TypeMapper.Map(type)})__mem.ReadFunctionPointer({EmitAddress(e)}))";
         return $"__mem.Read{MemoryAccess.Suffix(type)}({EmitAddress(e)})";
     }
 
@@ -277,7 +279,13 @@ public sealed partial class CSharpEmitter
         // a long, so cast it to the field type. A plain-local assignment needs parens as a value.
         if (AsBitField(a.Target) is { } bf)
             return $"unchecked(({TypeMapper.Map(bf.FieldType)})({store}))";
-        return IsMemoryLvalue(a.Target, _model, _plan) ? store : $"({store})";
+        if (IsMemoryLvalue(a.Target, _model, _plan))
+        {
+            // StoreFunctionPointer returns object?; cast back to the delegate type for the value.
+            var tt = _model.TypeOf(a.Target)?.Type.Type;
+            return tt is not null && TypeMapper.IsFunctionPointer(tt) ? $"(({TypeMapper.Map(tt)})({store}))" : store;
+        }
+        return $"({store})";
     }
 
     /// <summary>Builds the store expression for an assignment (used for both value and statement contexts).</summary>

@@ -180,6 +180,35 @@ public sealed class CMemory
     public double StoreDouble(CPtr p, double v) { WriteDouble(p, v); return v; }
     public CPtr StorePointer(CPtr p, CPtr v) { WritePointer(p, v); return v; }
 
+    // --- function pointers ------------------------------------------------
+    //
+    // A C function pointer is a managed delegate, not bytes, so it cannot live in the byte-addressed
+    // store directly. Instead memory holds an opaque 8-byte token into this table (index 0 == null),
+    // letting a function pointer sit in a struct field, array, or address-taken variable like any
+    // other pointer. Interning is canonical (equal delegates share a token) so pointer equality works.
+
+    private readonly List<object?> _functions = new() { null };
+    private readonly Dictionary<object, ulong> _functionTokens = new();
+
+    private ulong InternFunction(object? fn)
+    {
+        if (fn is null) return 0;
+        if (_functionTokens.TryGetValue(fn, out var existing)) return existing;
+        ulong token = (ulong)_functions.Count;
+        _functions.Add(fn);
+        _functionTokens[fn] = token;
+        return token;
+    }
+
+    public object? ReadFunctionPointer(CPtr p)
+    {
+        ulong token = ReadUInt64(p);
+        return token < (ulong)_functions.Count ? _functions[(int)token] : null;
+    }
+
+    public void WriteFunctionPointer(CPtr p, object? fn) => WriteUInt64(p, InternFunction(fn));
+    public object? StoreFunctionPointer(CPtr p, object? fn) { WriteFunctionPointer(p, fn); return fn; }
+
     // --- bit-fields -------------------------------------------------------
 
     /// <summary>Reads a bit-field: <paramref name="bitWidth"/> bits at <paramref name="bitOffset"/> within a storage unit of <paramref name="unitSize"/> bytes.</summary>

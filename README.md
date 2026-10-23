@@ -20,7 +20,7 @@ bounds/use-after-free checks. This faithfully supports the hard cases — stored
 ## Status
 
 Working end-to-end for a large C89 subset: the full pipeline lexes, preprocesses, parses, analyzes,
-and emits C# that compiles and runs. **466 tests pass** (unit + golden end-to-end), including 20
+and emits C# that compiles and runs. **472 tests pass** (unit + golden end-to-end), including 20
 whole-program compile-and-run golden programs. The bundled C89 standard library is essentially
 complete (all standard headers present).
 
@@ -109,7 +109,7 @@ callbacks.
 | Emit: `int main(void)` **and** `int main(int argc, char **argv)` | ✅ |
 | `long long` | ⛔ Rejected (correctly — not in C89) |
 | Variadic macros | ⛔ Rejected (correctly — C99) |
-| **Function pointers stored in memory** (fn-pointer struct fields / address-taken fn-pointer variables) | ❌ Not yet (work as plain locals/values) |
+| Emit: function pointers stored in memory (struct fields, arrays, address-taken variables) | ✅ via a delegate-token table in `CMemory` |
 | **K&R function *definitions*** with parameters | ❌ Parsed, rejected at emit (prototypes are fine) |
 | Trigraphs | ❌ Not translated |
 | `long double` precision | ⚠️ Modeled, but collapses to `double` at emit |
@@ -157,13 +157,9 @@ type system, and the runtime memory model.
 
 ## Roadmap
 
-The C89 standard library is essentially complete; the remaining gaps are language-level emit
-constructs:
+The C89 standard library is complete and the memory model now covers function pointers. The
+remaining gaps are narrower language-level items:
 
-- **Function pointers stored in memory** (fn-pointer struct fields / address-taken fn-pointer
-  variables) — the last notable language-level emit gap. (Passing a function *by name* as a call
-  argument already works — `qsort`/`atexit`/`signal` callbacks are fine — and a null function
-  pointer now casts correctly.)
-- **K&R function bodies** at emit.
+- **K&R function bodies** at emit (prototypes and empty-parameter functions already work).
 - Wider `setjmp` positions if needed (today: if/switch condition, or a declaration/assignment of
   its result — the canonical idioms); `trigraphs`; true extended `long double` precision.
