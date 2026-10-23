@@ -14,6 +14,7 @@ public sealed class SemanticModel
     private readonly Dictionary<Node, Symbol> _symbolsByNode = new();
     private readonly Dictionary<Expression, ExpressionType> _expressionTypes = new();
     private readonly Dictionary<TypeName, Types.QualType> _resolvedTypeNames = new();
+    private readonly Dictionary<FunctionDefinition, IReadOnlyList<Symbol>> _functionParameters = new();
 
     public SemanticModel(Scope globalScope, IReadOnlyList<Diagnostic> diagnostics)
     {
@@ -37,6 +38,13 @@ public sealed class SemanticModel
 
     /// <summary>The resolved type of a cast/sizeof type-name.</summary>
     public IReadOnlyDictionary<TypeName, Types.QualType> ResolvedTypeNames => _resolvedTypeNames;
+
+    /// <summary>The parameter symbols of a function definition, in declaration order (empty for none).
+    /// Covers both prototype and old-style (K&amp;R) definitions, so Emit can spill them uniformly.</summary>
+    public IReadOnlyList<Symbol> ParametersOf(FunctionDefinition f)
+        => _functionParameters.TryGetValue(f, out var ps) ? ps : [];
+
+    internal void RecordParameters(FunctionDefinition f, IReadOnlyList<Symbol> parameters) => _functionParameters[f] = parameters;
 
     internal void RecordSymbol(Node node, Symbol symbol) => _symbolsByNode[node] = symbol;
 

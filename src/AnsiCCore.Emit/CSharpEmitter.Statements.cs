@@ -180,27 +180,40 @@ public sealed partial class CSharpEmitter
     private readonly Dictionary<CallExpression, string> _setjmpVars = new();
     private int _setjmpCounter;
 
-    /// <summary>Finds a <c>setjmp(...)</c> call reachable in a block item (a declaration initializer,
-    /// an expression statement, or an if/switch controlling expression); otherwise null.</summary>
+    /// <summary>Finds a <c>setjmp(...)</c> call reachable in the expressions a block item evaluates
+    /// directly (declaration initializers, an expression/return statement, or a controlling
+    /// expression of an if/switch/while/do/for); otherwise null. The block from this item onward is
+    /// then wrapped so a longjmp re-enters it.</summary>
     private static CallExpression? ItemSetjmpCall(Node item) => item switch
     {
         Declaration d => d.InitDeclarators.Select(x => x.Initializer).OfType<ExpressionInitializer>()
             .Select(x => FindSetjmpCall(x.Expression)).FirstOrDefault(c => c is not null),
         ExpressionStatement { Expression: { } e } => FindSetjmpCall(e),
+        ReturnStatement { Value: { } v } => FindSetjmpCall(v),
         IfStatement i => FindSetjmpCall(i.Condition),
         SwitchStatement s => FindSetjmpCall(s.Expression),
+        WhileStatement w => FindSetjmpCall(w.Condition),
+        DoStatement do_ => FindSetjmpCall(do_.Condition),
+        ForStatement f => FindSetjmpCall(f.Initializer) ?? FindSetjmpCall(f.Condition) ?? FindSetjmpCall(f.Iteration),
         _ => null,
     };
 
-    /// <summary>Finds a direct <c>setjmp(...)</c> call within an expression, through the common
-    /// wrappers (comparisons, assignment RHS, casts, unary).</summary>
-    private static CallExpression? FindSetjmpCall(Expression e) => e switch
+    /// <summary>Recursively finds a <c>setjmp(...)</c> call anywhere within an expression.</summary>
+    private static CallExpression? FindSetjmpCall(Expression? e) => e switch
     {
+        null => null,
         CallExpression { Callee: IdentifierExpression { Name: "setjmp" } } c => c,
+        CallExpression c => FindSetjmpCall(c.Callee) ?? c.Arguments.Select(FindSetjmpCall).FirstOrDefault(x => x is not null),
         BinaryExpression b => FindSetjmpCall(b.Left) ?? FindSetjmpCall(b.Right),
-        AssignmentExpression a => FindSetjmpCall(a.Value),
+        AssignmentExpression a => FindSetjmpCall(a.Target) ?? FindSetjmpCall(a.Value),
+        ConditionalExpression c => FindSetjmpCall(c.Condition) ?? FindSetjmpCall(c.WhenTrue) ?? FindSetjmpCall(c.WhenFalse),
+        CommaExpression cm => FindSetjmpCall(cm.Left) ?? FindSetjmpCall(cm.Right),
         UnaryExpression u => FindSetjmpCall(u.Operand),
+        PostfixExpression p => FindSetjmpCall(p.Operand),
         CastExpression cast => FindSetjmpCall(cast.Operand),
+        IndexExpression ix => FindSetjmpCall(ix.Array) ?? FindSetjmpCall(ix.Index),
+        MemberExpression m => FindSetjmpCall(m.Target),
+        SizeOfExpression => null, // sizeof does not evaluate its operand
         _ => null,
     };
 

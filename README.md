@@ -20,7 +20,7 @@ bounds/use-after-free checks. This faithfully supports the hard cases — stored
 ## Status
 
 Working end-to-end for a large C89 subset: the full pipeline lexes, preprocesses, parses, analyzes,
-and emits C# that compiles and runs. **472 tests pass** (unit + golden end-to-end), including 20
+and emits C# that compiles and runs. **481 tests pass** (unit + golden end-to-end), including 20
 whole-program compile-and-run golden programs. The bundled C89 standard library is essentially
 complete (all standard headers present).
 
@@ -110,9 +110,10 @@ callbacks.
 | `long long` | ⛔ Rejected (correctly — not in C89) |
 | Variadic macros | ⛔ Rejected (correctly — C99) |
 | Emit: function pointers stored in memory (struct fields, arrays, address-taken variables) | ✅ via a delegate-token table in `CMemory` |
-| **K&R function *definitions*** with parameters | ❌ Parsed, rejected at emit (prototypes are fine) |
-| Trigraphs | ❌ Not translated |
-| `long double` precision | ⚠️ Modeled, but collapses to `double` at emit |
+| K&R function definitions (explicit return type) | ✅ types resolved from the declaration block |
+| Trigraphs | ✅ translated in phase 1 (on by default) |
+| `long double` | ✅ represented as `double` — a conforming C89 choice (.NET has no wider binary float) |
+| Implicit `int` (missing type specifier) | ❌ not yet (affects implicit-int K&R returns) |
 | `#line` line remapping | ⚠️ Parsed, not applied |
 
 ### C standard library (bundled shims)
@@ -157,9 +158,13 @@ type system, and the runtime memory model.
 
 ## Roadmap
 
-The C89 standard library is complete and the memory model now covers function pointers. The
-remaining gaps are narrower language-level items:
+The C89 standard library is complete, the memory model covers function pointers, and K&R
+definitions, trigraphs, and `setjmp` in general expression positions all work. The main remaining
+language item is:
 
-- **K&R function bodies** at emit (prototypes and empty-parameter functions already work).
-- Wider `setjmp` positions if needed (today: if/switch condition, or a declaration/assignment of
-  its result — the canonical idioms); `trigraphs`; true extended `long double` precision.
+- **Implicit `int`** — a declaration or function definition with no type specifier (C89 defaults
+  it to `int`). Notably this is what blocks implicit-`int`-returning K&R functions; explicit
+  return types already work.
+
+`setjmp` is supported wherever it is reachable in a block item's expressions (its canonical idioms
+and beyond); a longjmp to a buffer whose setjmp frame has already returned is undefined, as in C.

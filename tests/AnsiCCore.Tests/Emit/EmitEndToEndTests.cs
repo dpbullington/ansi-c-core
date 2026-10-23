@@ -15,6 +15,11 @@ public class EmitEndToEndTests
         => ExitsWith(42, "int main(void) { return 42; }");
 
     [Test]
+    public void LongDouble_BehavesAsDouble()
+        // long double has the same (double) representation — a conforming C89 choice on .NET.
+        => ExitsWith(8, "int main(void) { long double x = 3.5L; long double y = x * 2.0L + 1.0L; return (int)y; }");
+
+    [Test]
     public void VoidCast_DiscardsValueButKeepsSideEffects()
     {
         // (void)expr evaluates expr for its side effects (the increment) and discards the result.

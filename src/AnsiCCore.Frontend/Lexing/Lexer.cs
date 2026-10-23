@@ -14,6 +14,13 @@ public sealed record LexerOptions
     /// </summary>
     public bool AllowLineComments { get; init; }
 
+    /// <summary>
+    /// C89 translation phase 1 replaces the nine trigraph sequences (e.g. <c>??=</c> → <c>#</c>)
+    /// everywhere, including inside string and character literals. On by default for conformance;
+    /// disable to treat source as already past phase 1.
+    /// </summary>
+    public bool Trigraphs { get; init; } = true;
+
     public static LexerOptions Default { get; } = new();
 }
 
@@ -42,10 +49,36 @@ public sealed class Lexer
 
     public Lexer(string text, string fileName = "<source>", DiagnosticBag? diagnostics = null, LexerOptions? options = null)
     {
-        _text = text ?? throw new ArgumentNullException(nameof(text));
+        ArgumentNullException.ThrowIfNull(text);
         _fileName = fileName;
         Diagnostics = diagnostics ?? new DiagnosticBag();
         _options = options ?? LexerOptions.Default;
+        _text = _options.Trigraphs ? TranslateTrigraphs(text) : text; // C89 phase 1
+    }
+
+    /// <summary>Replaces the nine C89 trigraph sequences (<c>?? </c> + a punctuator), left to right.</summary>
+    private static string TranslateTrigraphs(string text)
+    {
+        int first = text.IndexOf('?');
+        if (first < 0 || first + 2 >= text.Length) return text; // no room for a '??x' sequence
+
+        var sb = new System.Text.StringBuilder(text.Length);
+        int i = 0;
+        while (i < text.Length)
+        {
+            if (i + 2 < text.Length && text[i] == '?' && text[i + 1] == '?')
+            {
+                char r = text[i + 2] switch
+                {
+                    '=' => '#', '(' => '[', ')' => ']', '/' => '\\', '\'' => '^',
+                    '<' => '{', '>' => '}', '!' => '|', '-' => '~', _ => '\0',
+                };
+                if (r != '\0') { sb.Append(r); i += 3; continue; }
+            }
+            sb.Append(text[i]);
+            i++;
+        }
+        return sb.ToString();
     }
 
     public DiagnosticBag Diagnostics { get; }

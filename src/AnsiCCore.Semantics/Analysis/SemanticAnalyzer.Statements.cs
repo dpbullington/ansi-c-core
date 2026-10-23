@@ -24,6 +24,18 @@ public sealed partial class SemanticAnalyzer
         if (functionType is null)
             Error(f.Location, $"'{name}' declared as a function definition but is not of function type");
 
+        // Old-style (K&R) definition: the declarator carried only parameter names; resolve their
+        // types from the definition's declaration block and rebuild the function type so it (and
+        // therefore Emit) sees the parameters.
+        var funcDeclarator = FindFunctionDeclarator(f.Declarator);
+        if (functionType is { HasPrototype: false }
+            && funcDeclarator is { Parameters: { Kind: ParameterKind.IdentifierList, Identifiers.Count: > 0 } })
+        {
+            functionType = new FunctionType(functionType.ReturnType, ResolveKnrParameters(f, funcDeclarator),
+                isVariadic: false, hasPrototype: false);
+            type = new QualType(functionType);
+        }
+
         var symbol = new Symbol(name, SymbolKind.Function, type, storage, f.Location) { IsDefined = true };
         DeclareOrdinaryChecked(symbol, fileScope: true);
         _symbols[f] = symbol;
@@ -37,7 +49,7 @@ public sealed partial class SemanticAnalyzer
         // so the function can see its file's static functions/globals plus the shared externals.
         var previous = _current;
         _current = new Scope(ScopeKind.Block, _currentFileScope);
-        DeclareParameters(f, functionType);
+        _functionParameters[f] = DeclareParameters(f, functionType);
 
         foreach (var item in f.Body.Items)
             AnalyzeBlockItem(item);
@@ -51,46 +63,46 @@ public sealed partial class SemanticAnalyzer
         _currentFunctionReturn = null;
     }
 
-    private void DeclareParameters(FunctionDefinition f, FunctionType? functionType)
+    /// <summary>Resolves an old-style (K&amp;R) parameter list: names from the identifier list, types
+    /// from the definition's declaration block (a name with no declaration defaults to <c>int</c>).</summary>
+    private List<Parameter> ResolveKnrParameters(FunctionDefinition f, FunctionDeclarator funcDeclarator)
     {
-        var funcDeclarator = FindFunctionDeclarator(f.Declarator);
-
-        if (funcDeclarator?.Parameters.Kind == ParameterKind.IdentifierList)
+        var types = new Dictionary<string, QualType>(StringComparer.Ordinal);
+        foreach (var decl in f.ParameterDeclarations)
         {
-            // K&R: names come from the identifier list; types from the parameter declarations.
-            var types = new Dictionary<string, QualType>(StringComparer.Ordinal);
-            foreach (var decl in f.ParameterDeclarations)
+            var pBase = ResolveSpecifiers(decl.Specifiers);
+            foreach (var init in decl.InitDeclarators)
             {
-                var pBase = ResolveSpecifiers(decl.Specifiers);
-                foreach (var init in decl.InitDeclarators)
-                {
-                    var (pName, pType) = ResolveDeclarator(pBase, init.Declarator);
-                    if (pName is not null) types[pName] = AdjustParameterType(pType);
-                }
+                var (pName, pType) = ResolveDeclarator(pBase, init.Declarator);
+                if (pName is not null) types[pName] = AdjustParameterType(pType);
             }
-
-            foreach (var pName in funcDeclarator.Parameters.Identifiers)
-            {
-                var pType = types.GetValueOrDefault(pName, new QualType(CTypes.Int));
-                _current.DeclareOrdinary(new Symbol(pName, SymbolKind.Parameter, pType, StorageClass.None, f.Location));
-            }
-            return;
         }
 
-        // Prototype: declare each named parameter, keying its symbol to the parameter AST node
-        // (counts align with the declarator's parameter list; a lone "(void)" has none).
-        if (functionType is null) return;
+        return funcDeclarator.Parameters.Identifiers
+            .Select(n => new Parameter(types.GetValueOrDefault(n, new QualType(CTypes.Int)), n))
+            .ToList();
+    }
 
-        var nodes = funcDeclarator?.Parameters.Parameters;
+    /// <summary>Declares a function's parameters in its scope (both prototype and K&amp;R, since the
+    /// K&amp;R type was rebuilt with its parameters) and returns them in order for Emit.</summary>
+    private List<Symbol> DeclareParameters(FunctionDefinition f, FunctionType? functionType)
+    {
+        var result = new List<Symbol>();
+        if (functionType is null) return result;
+
+        // Prototype parameter AST nodes (if any) let us key each symbol to its node; K&R has none.
+        var nodes = FindFunctionDeclarator(f.Declarator)?.Parameters.Parameters;
         for (int i = 0; i < functionType.Parameters.Count; i++)
         {
             var p = functionType.Parameters[i];
             if (p.Name is null) continue;
             var sym = new Symbol(p.Name, SymbolKind.Parameter, p.Type, StorageClass.None, f.Location);
             _current.DeclareOrdinary(sym);
+            result.Add(sym);
             if (nodes is not null && i < nodes.Count)
                 _symbols[nodes[i]] = sym;
         }
+        return result;
     }
 
     private static FunctionDeclarator? FindFunctionDeclarator(Declarator d) => d switch

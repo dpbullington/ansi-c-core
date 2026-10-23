@@ -59,5 +59,8 @@ internal static class TypeMapper
         _ => "int",
     };
 
+    // long double maps to double: .NET has no binary float wider than 64 bits, so long double has
+    // the same representation as double — a conforming C89 choice (as on MSVC, ARM64, and others),
+    // consistent with the type system modeling sizeof(long double) == 8.
     private static string MapFloating(FloatingType f) => f.Kind == FloatingKind.Float ? "float" : "double";
 }

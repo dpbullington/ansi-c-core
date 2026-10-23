@@ -172,8 +172,6 @@ public sealed partial class CSharpEmitter
     {
         if (!_model.SymbolsByNode.TryGetValue(f, out var symbol) || symbol.Type.Type is not FunctionType ft)
             throw new EmitException("function definition was not resolved by semantic analysis");
-        if (!ft.HasPrototype && HasParameters(f))
-            throw new EmitException($"old-style (K&R) function '{symbol.Name}' is not supported yet");
 
         string returnType = TypeMapper.Map(ft.ReturnType);
         string name = SymbolName(symbol);
@@ -199,7 +197,7 @@ public sealed partial class CSharpEmitter
         if (ft.IsVariadic) _usedNames.Add(VaListParam);
 
         OpenBrace();
-        EmitParameterSpilling(f, ft);
+        EmitParameterSpilling(f);
         EmitBlockItems(f.Body.Items);
         CloseBrace();
 
@@ -207,47 +205,33 @@ public sealed partial class CSharpEmitter
         Line();
     }
 
-    /// <summary>Spills address-taken scalar parameters into memory regions at function entry.</summary>
-    private void EmitParameterSpilling(FunctionDefinition f, FunctionType ft)
+    /// <summary>Spills address-taken scalar parameters into memory regions at function entry. Works
+    /// from the resolved parameter symbols, so it covers both prototype and old-style definitions.</summary>
+    private void EmitParameterSpilling(FunctionDefinition f)
     {
-        var nodes = FindFunctionDeclarator(f.Declarator)?.Parameters.Parameters;
-        if (nodes is null) return;
-
-        for (int i = 0; i < ft.Parameters.Count && i < nodes.Count; i++)
+        foreach (var sym in _model.ParametersOf(f))
         {
-            var p = ft.Parameters[i];
-            if (p.Name is null) continue;
-            if (!_model.SymbolsByNode.TryGetValue(nodes[i], out var sym) || !_plan.IsMemoryBacked(sym)) continue;
-            string paramName = Naming.Safe(p.Name);
+            if (!_plan.IsMemoryBacked(sym)) continue;
+            var type = sym.Type.Type;
+            string paramName = Naming.Safe(sym.Name);
 
             // A by-value struct/union parameter already arrives as a CPtr to the caller's copy;
             // use it directly as the object's address (no spill needed).
-            if (p.Type.Type is RecordType)
+            if (type is RecordType)
             {
                 _addressOf[sym] = paramName;
                 continue;
             }
-            if (p.Type.Type is ArrayType)
+            if (type is ArrayType)
                 throw new EmitException("array parameters by value are not supported");
 
             // Address-taken scalar/pointer parameter: spill its incoming value into a region.
             string addr = paramName + "__a";
             _addressOf[sym] = addr;
-            Line($"CPtr {addr} = __mem.Allocate({MemoryAccess.SizeOf(p.Type.Type)}, RegionKind.Automatic);");
-            Line($"__mem.Write{MemoryAccess.Suffix(p.Type.Type)}({addr}, {paramName});");
+            Line($"CPtr {addr} = __mem.Allocate({MemoryAccess.SizeOf(type)}, RegionKind.Automatic);");
+            Line($"__mem.Write{MemoryAccess.Suffix(type)}({addr}, {paramName});");
         }
     }
-
-    private static FunctionDeclarator? FindFunctionDeclarator(Declarator d) => d switch
-    {
-        FunctionDeclarator fd => fd,
-        PointerDeclarator p => FindFunctionDeclarator(p.Inner),
-        ArrayDeclarator a => FindFunctionDeclarator(a.Inner),
-        _ => null,
-    };
-
-    private static bool HasParameters(FunctionDefinition f)
-        => f.Declarator is FunctionDeclarator { Parameters.Kind: ParameterKind.IdentifierList } fd && fd.Parameters.Identifiers.Count > 0;
 
     // --- entry point ------------------------------------------------------
 

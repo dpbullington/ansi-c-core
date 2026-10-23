@@ -165,14 +165,32 @@ public class EmitTier3Tests
     }
 
     [Test]
-    public void Setjmp_UnsupportedPositionIsAnError()
+    public void Setjmp_NestedInExpression()
     {
-        // setjmp outside an if/switch/assignment position is rejected with a clear message.
+        // setjmp need not be the whole controlling expression; it is found anywhere in the item.
         const string src = """
             #include <setjmp.h>
-            int main(void) { jmp_buf e; return setjmp(e) + 1; }
+            #include <stdio.h>
+            static jmp_buf e;
+            int main(void)
+            {
+                int r = 5 + setjmp(e); /* setjmp nested in a binary expression */
+                if (r == 5) longjmp(e, 3);
+                printf("r=%d\n", r); /* 5 + 3 = 8 */
+                return 0;
+            }
             """;
-        var ex = Assert.Throws<AssertionException>(() => Run(src));
-        Assert.That(ex!.Message, Does.Contain("setjmp"));
+        Assert.That(Run(src).Output, Is.EqualTo("r=8\n"));
+    }
+
+    [Test]
+    public void Setjmp_InReturnExpression()
+    {
+        // setjmp in a return expression is accepted (first and only pass returns its direct value).
+        const string src = """
+            #include <setjmp.h>
+            int main(void) { jmp_buf e; return setjmp(e) + 7; }
+            """;
+        Assert.That(Run(src).Exit, Is.EqualTo(7));
     }
 }

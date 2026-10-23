@@ -24,6 +24,7 @@ public sealed partial class SemanticAnalyzer
     private readonly Dictionary<Node, Symbol> _symbols = new();
     private readonly Dictionary<Expression, ExpressionType> _expressionTypes = new();
     private readonly Dictionary<TypeName, QualType> _typeNames = new();
+    private readonly Dictionary<FunctionDefinition, IReadOnlyList<Symbol>> _functionParameters = new();
     private readonly Scope _global;
     private Scope _current;
 
@@ -66,6 +67,8 @@ public sealed partial class SemanticAnalyzer
             model.RecordExpressionType(expr, type);
         foreach (var (node, type) in analyzer._typeNames)
             model.RecordTypeName(node, type);
+        foreach (var (func, parameters) in analyzer._functionParameters)
+            model.RecordParameters(func, parameters);
         return model;
     }
 
