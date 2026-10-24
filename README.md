@@ -20,7 +20,7 @@ bounds/use-after-free checks. This faithfully supports the hard cases — stored
 ## Status
 
 Working end-to-end for a large C89 subset: the full pipeline lexes, preprocesses, parses, analyzes,
-and emits C# that compiles and runs. **481 tests pass** (unit + golden end-to-end), including 20
+and emits C# that compiles and runs. **484 tests pass** (unit + golden end-to-end), including 20
 whole-program compile-and-run golden programs. The bundled C89 standard library is essentially
 complete (all standard headers present).
 
@@ -113,7 +113,7 @@ callbacks.
 | K&R function definitions (explicit return type) | ✅ types resolved from the declaration block |
 | Trigraphs | ✅ translated in phase 1 (on by default) |
 | `long double` | ✅ represented as `double` — a conforming C89 choice (.NET has no wider binary float) |
-| Implicit `int` (missing type specifier) | ❌ not yet (affects implicit-int K&R returns) |
+| Implicit `int` (missing type specifier) | ✅ defaults to `int` (`main() {…}`, `static x;`, implicit-int K&R returns) |
 | `#line` line remapping | ⚠️ Parsed, not applied |
 
 ### C standard library (bundled shims)
@@ -158,13 +158,13 @@ type system, and the runtime memory model.
 
 ## Roadmap
 
-The C89 standard library is complete, the memory model covers function pointers, and K&R
-definitions, trigraphs, and `setjmp` in general expression positions all work. The main remaining
-language item is:
+C89 coverage is now broad: the full standard library, the memory model (including function
+pointers), K&R and implicit-`int` definitions, trigraphs, and `setjmp`/`longjmp` all work. What
+remains is hardening against whatever real-world programs exercise, and non-essential corners:
 
-- **Implicit `int`** — a declaration or function definition with no type specifier (C89 defaults
-  it to `int`). Notably this is what blocks implicit-`int`-returning K&R functions; explicit
-  return types already work.
+- **Implicit function declaration** — calling an undeclared function is diagnosed and assumed to
+  return `int` (C89 permits this); exercising more of that path is possible but rarely needed.
+- `long double` is represented as `double` (a conforming choice — .NET has no wider binary float).
 
 `setjmp` is supported wherever it is reachable in a block item's expressions (its canonical idioms
 and beyond); a longjmp to a buffer whose setjmp frame has already returned is undefined, as in C.

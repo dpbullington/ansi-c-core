@@ -69,6 +69,46 @@ public class EmitKnrAndTrigraphTests
         Assert.That(EmitTestHost.Run(src), Is.EqualTo(105));
     }
 
+    // --- implicit int -----------------------------------------------------
+
+    [Test]
+    public void ImplicitInt_MainWithNoReturnType()
+        => Assert.That(EmitTestHost.Run("main() { return 42; }"), Is.EqualTo(42));
+
+    [Test]
+    public void ImplicitInt_KnrFunctionWithNoReturnType()
+    {
+        // The case that previously failed: an implicit-int return on a K&R definition.
+        const string src = """
+            total(p, n)
+            int *p;
+            int n;
+            {
+                int i, sum = 0;
+                for (i = 0; i < n; i = i + 1) sum = sum + p[i];
+                return sum;
+            }
+            int main(void) { int v[3]; v[0]=10; v[1]=20; v[2]=12; return total(v, 3); }
+            """;
+        Assert.That(EmitTestHost.Run(src), Is.EqualTo(42));
+    }
+
+    [Test]
+    public void ImplicitInt_GlobalWithInitializerAndStaticLocal()
+    {
+        const string src = """
+            counter = 10;               /* implicit-int global */
+            get() { return counter; }   /* implicit-int, empty parameter list */
+            int main(void)
+            {
+                static x;               /* implicit-int local (storage class present) */
+                x = get() + 32;
+                return x;
+            }
+            """;
+        Assert.That(EmitTestHost.Run(src), Is.EqualTo(42));
+    }
+
     // --- trigraphs --------------------------------------------------------
 
     [Test]

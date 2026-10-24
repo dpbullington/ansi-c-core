@@ -13,7 +13,13 @@ public sealed partial class Parser
     private Node ParseExternalDeclaration()
     {
         var start = Current.Location;
-        var specifiers = ParseDeclarationSpecifiers();
+        // Implicit int (C89 §3.5.2): an external declaration may omit its specifiers entirely (e.g.
+        // "main() { ... }" or "oldfn(a, b) int a, b; { ... }"), defaulting the type to int. Since
+        // everything at file scope is a declaration, a token that is not a specifier but begins a
+        // declarator is taken as an implicit-int declaration.
+        var specifiers = IsDeclarationSpecifierStart(Current)
+            ? ParseDeclarationSpecifiers()
+            : new DeclarationSpecifiers(start, [], [], []);
 
         // A lone "struct S { ... };" style declaration with no declarators.
         if (Match(TokenKind.Semicolon))
